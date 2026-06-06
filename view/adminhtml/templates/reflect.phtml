@@ -1,0 +1,217 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Reflect;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Reflect $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-reflect-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php
+        $status = $viewModel->getStatus() ?? [];
+        $reflectEnabled = (bool) ($status['enabled'] ?? false);
+        $mode = (string) ($status['mode'] ?? '');
+        $queuedPurges = (int) ($status['queued_purges'] ?? 0);
+        $blockedPurgeRequests = (int) ($status['blocked_purge_requests'] ?? 0);
+        $reason = (string) ($status['reason'] ?? '');
+        $duration = (string) ($status['duration'] ?? '');
+
+        $queue = $viewModel->getQueue() ?? [];
+        $queueEntries = [];
+        if (isset($queue['entries']) && is_array($queue['entries'])) {
+            $queueEntries = $queue['entries'];
+        } elseif (isset($queue['tags']) && is_array($queue['tags'])) {
+            $queueEntries = $queue['tags'];
+        } elseif (array_is_list($queue)) {
+            $queueEntries = $queue;
+        }
+        ?>
+
+        <div class="message message-notice">
+            <span><?= $escaper->escapeHtml(__('Reflect mode is an emergency origin shield. While active, Trident serves stale content and defers (queues) all purge requests so the origin is protected from load. Disable it once the origin has recovered.')) ?></span>
+        </div>
+
+        <!-- Status -->
+        <div class="trident-card trident-card-reflect-status">
+            <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Reflect Mode Status')) ?></h3>
+            <table class="trident-table">
+                <tbody>
+                    <tr>
+                        <th><?= $escaper->escapeHtml(__('Status')) ?></th>
+                        <td>
+                            <?php if ($reflectEnabled): ?>
+                                <strong><?= $escaper->escapeHtml(__('ACTIVE')) ?></strong>
+                            <?php else: ?>
+                                <?= $escaper->escapeHtml(__('Inactive')) ?>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><?= $escaper->escapeHtml(__('Mode / Level')) ?></th>
+                        <td><?= $escaper->escapeHtml($mode !== '' ? $mode : __('—')) ?></td>
+                    </tr>
+                    <tr>
+                        <th><?= $escaper->escapeHtml(__('Queued Purges')) ?></th>
+                        <td><?= $escaper->escapeHtml($viewModel->formatNumber($queuedPurges)) ?></td>
+                    </tr>
+                    <tr>
+                        <th><?= $escaper->escapeHtml(__('Blocked Purge Requests')) ?></th>
+                        <td><?= $escaper->escapeHtml($viewModel->formatNumber($blockedPurgeRequests)) ?></td>
+                    </tr>
+                    <tr>
+                        <th><?= $escaper->escapeHtml(__('Reason')) ?></th>
+                        <td><?= $escaper->escapeHtml($reason !== '' ? $reason : __('—')) ?></td>
+                    </tr>
+                    <tr>
+                        <th><?= $escaper->escapeHtml(__('Duration')) ?></th>
+                        <td><?= $escaper->escapeHtml($duration !== '' ? $duration : __('—')) ?></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <?php if ($reflectEnabled): ?>
+            <!-- Active warning + disable controls -->
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Reflect mode is ACTIVE. Trident is serving stale content and queuing all purges. New content and cache invalidations are NOT being applied to the origin.')) ?></span>
+            </div>
+
+            <div class="trident-card trident-card-reflect-disable">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Disable Reflect Mode')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Disable reflect mode once the origin has recovered. Choose whether the queued purges are replayed (hard-purged, forcing an immediate refetch) or soft-purged (marked stale for lazy revalidation on the next request).')) ?>
+                </p>
+
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/reflect/disable')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <input type="hidden" name="mode" value="replay"/>
+                    <button type="submit" class="action-default scalable primary" onclick="return confirm('<?= $escaper->escapeJs(__('Disable reflect mode and replay the queued purges against the origin?')) ?>')">
+                        <span><?= $escaper->escapeHtml(__('Disable (replay purges)')) ?></span>
+                    </button>
+                </form>
+
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/reflect/disable')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <input type="hidden" name="mode" value="hard"/>
+                    <button type="submit" class="action-default scalable" onclick="return confirm('<?= $escaper->escapeJs(__('Disable reflect mode and soft-purge the queued targets (mark them stale for lazy revalidation on the next request)?')) ?>')">
+                        <span><?= $escaper->escapeHtml(__('Disable (soft-purge / lazy recache)')) ?></span>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Queued purges -->
+            <div class="trident-card trident-card-reflect-queue">
+                <h3 class="trident-card-title">
+                    <?= $escaper->escapeHtml(__('Queued Purges (%1)', $viewModel->formatNumber($queuedPurges))) ?>
+                </h3>
+                <?php if (!empty($queueEntries)): ?>
+                    <table class="trident-table">
+                        <thead>
+                            <tr>
+                                <th><?= $escaper->escapeHtml(__('Queued Purge')) ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($queueEntries as $entry): ?>
+                                <tr>
+                                    <td>
+                                        <?php if (is_array($entry)): ?>
+                                            <code><?= $escaper->escapeHtml((string) ($entry['tag'] ?? $entry['url'] ?? json_encode($entry))) ?></code>
+                                        <?php else: ?>
+                                            <code><?= $escaper->escapeHtml((string) $entry) ?></code>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(__('No purges are currently queued.')) ?>
+                    </p>
+                <?php endif; ?>
+            </div>
+        <?php else: ?>
+            <!-- Enable controls -->
+            <div class="trident-card trident-card-reflect-enable">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Enable Reflect Mode')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Enable reflect mode to shield the origin during an incident. Trident will serve stale content and queue all purge requests until you disable it.')) ?>
+                </p>
+
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/reflect/enable')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_reflect_level">
+                            <span><?= $escaper->escapeHtml(__('Mode')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <select id="trident_reflect_level" name="level" class="admin__control-select">
+                                <option value="full"><?= $escaper->escapeHtml(__('Full (serve stale, queue all purges)')) ?></option>
+                                <option value="selective"><?= $escaper->escapeHtml(__('Selective')) ?></option>
+                                <option value="ttl_extension"><?= $escaper->escapeHtml(__('TTL extension')) ?></option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_reflect_duration">
+                            <span><?= $escaper->escapeHtml(__('Duration (optional)')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_reflect_duration"
+                                   name="duration"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., 30m, 2h')) ?>"/>
+                        </div>
+                    </div>
+
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_reflect_reason">
+                            <span><?= $escaper->escapeHtml(__('Reason (optional)')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_reflect_reason"
+                                   name="reason"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., origin outage, database maintenance')) ?>"/>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="action-default scalable primary" onclick="return confirm('<?= $escaper->escapeJs(__('Enable reflect mode? Purges will be queued and stale content will be served until you disable it.')) ?>')">
+                        <span><?= $escaper->escapeHtml(__('Enable reflect')) ?></span>
+                    </button>
+                </form>
+            </div>
+        <?php endif; ?>
+
+        <div class="trident-api-info">
+            <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+        </div>
+    <?php endif; ?>
+</div>

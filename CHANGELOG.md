@@ -5,6 +5,29 @@ All notable changes to Qoliber_TridentCache will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-04
+
+### Added — admin feature parity with the Trident admin panel
+
+Brings the full Trident operator surface into the Magento backend (System > Trident Cache).
+Each screen follows the existing controller/ViewModel/template/ACL pattern and talks to the
+admin API through `Model\TridentClient` (extended with ~30 new methods + shared GET/POST/DELETE helpers).
+
+- **Cache Warmer** (`trident/warmer`) — status (state, current-run progress, last-run summary),
+  Run-now (optional URL list), Cancel.
+- **Launch Mode** (`trident/launch`) — start (URL list, auto-complete, bypass IPs), live state +
+  progress, complete (go-live), abort.
+- **Reflect Mode** (`trident/reflect`) — emergency origin shield; enable (full/selective/ttl_extension
+  + duration/reason), disable (replay = hard-purge, or soft-purge = mark stale for lazy
+  revalidation), queued-purge view, active warning banner.
+- **Denoisers** (`trident/denoisers`) — query-scope + path-zone report, per-row pin/unpin/reset, WAF export.
+- **Bans** (`trident/bans`) — list active/expired soft-purge bans, create (url/tag/host), delete.
+- **Backends** (`trident/backends`) — per-backend health cards (drain/restore) + connection-pool table.
+- **DNS Discovery** (`trident/dns`) — discovered targets table + refresh.
+- **Live Events** (`trident/events`) — poll-based console over the SSE streams (requests/cache/backends/errors).
+- **Richer Statistics** — latency percentiles, recent errors, protection summary, BP-59 memory layout.
+- **Expanded Purge** — purge by host and by Vary (in addition to all / tags / url / pattern).
+
 ## [1.1.0] - 2026-03-06
 
 ### Added

@@ -1,0 +1,167 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Bans;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Bans $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-bans-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php
+        $bans = $viewModel->getBanList();
+        $activeCount = $viewModel->countActive($bans);
+        $expiredCount = $viewModel->countExpired($bans);
+        ?>
+        <div class="trident-bans-grid">
+            <!-- What is a ban -->
+            <div class="trident-card trident-card-bans-info">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('About Bans')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('A ban is a lazy soft-purge: matching entries are not removed immediately. Instead, the ban is recorded and each cached entry is invalidated on its next lookup if it matches the pattern. This keeps purges cheap on large caches at the cost of a small per-request check.')) ?>
+                </p>
+                <div class="trident-stats-row">
+                    <div class="trident-stat">
+                        <span class="trident-stat-value"><?= $escaper->escapeHtml((string)$activeCount) ?></span>
+                        <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Active Bans')) ?></span>
+                    </div>
+                    <div class="trident-stat">
+                        <span class="trident-stat-value"><?= $escaper->escapeHtml((string)$expiredCount) ?></span>
+                        <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Expired Bans')) ?></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Create ban -->
+            <div class="trident-card trident-card-create-ban">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Create Ban')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Enter a pattern to ban. The type determines how the pattern is matched: by URL, by cache tag, or by host.')) ?>
+                </p>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/bans/create')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_ban_pattern">
+                            <span><?= $escaper->escapeHtml(__('Pattern')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_ban_pattern"
+                                   name="pattern"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., /catalog/.*, cat_p_42, example.com')) ?>"
+                                   required/>
+                        </div>
+                    </div>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_ban_type">
+                            <span><?= $escaper->escapeHtml(__('Type')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <select id="trident_ban_type" name="type" class="admin__control-select">
+                                <option value="url"><?= $escaper->escapeHtml(__('URL')) ?></option>
+                                <option value="tag"><?= $escaper->escapeHtml(__('Tag')) ?></option>
+                                <option value="host"><?= $escaper->escapeHtml(__('Host')) ?></option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="action-default scalable primary">
+                        <span><?= $escaper->escapeHtml(__('Create Ban')) ?></span>
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Bans table -->
+        <div class="trident-card trident-card-bans-list">
+            <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Active and Expired Bans')) ?></h3>
+            <?php if (empty($bans)): ?>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('No bans are currently registered. Create one above to lazily invalidate matching cache entries.')) ?>
+                </p>
+            <?php else: ?>
+                <div class="trident-table-wrapper">
+                    <table class="admin__table-primary trident-table trident-bans-table">
+                        <thead>
+                            <tr>
+                                <th><?= $escaper->escapeHtml(__('Pattern')) ?></th>
+                                <th><?= $escaper->escapeHtml(__('Type')) ?></th>
+                                <th><?= $escaper->escapeHtml(__('Created At')) ?></th>
+                                <th><?= $escaper->escapeHtml(__('Expires At')) ?></th>
+                                <th><?= $escaper->escapeHtml(__('Action')) ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($bans as $ban): ?>
+                                <?php
+                                $id = (string)($ban['id'] ?? '');
+                                $pattern = (string)($ban['pattern'] ?? '');
+                                $type = (string)($ban['type'] ?? 'url');
+                                $createdAt = (string)($ban['created_at'] ?? '');
+                                $expiresAt = (string)($ban['expires_at'] ?? '');
+                                $expired = $viewModel->isExpired($ban);
+                                ?>
+                                <tr class="<?= $expired ? 'trident-ban-expired' : 'trident-ban-active' ?>">
+                                    <td class="trident-col-url"><code><?= $escaper->escapeHtml($pattern) ?></code></td>
+                                    <td>
+                                        <span class="trident-badge trident-badge-<?= $escaper->escapeHtmlAttr($type) ?>">
+                                            <?= $escaper->escapeHtml($type) ?>
+                                        </span>
+                                    </td>
+                                    <td><?= $escaper->escapeHtml($createdAt !== '' ? $createdAt : '—') ?></td>
+                                    <td>
+                                        <?php if ($expiresAt === ''): ?>
+                                            <?= $escaper->escapeHtml(__('Never')) ?>
+                                        <?php else: ?>
+                                            <?= $escaper->escapeHtml($expiresAt) ?>
+                                            <?php if ($expired): ?>
+                                                <span class="trident-badge trident-badge-expired"><?= $escaper->escapeHtml(__('expired')) ?></span>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($id !== ''): ?>
+                                            <form action="<?= $escaper->escapeUrl($block->getUrl('trident/bans/delete')) ?>" method="post">
+                                                <?= $block->getBlockHtml('formkey') ?>
+                                                <input type="hidden" name="id" value="<?= $escaper->escapeHtmlAttr($id) ?>"/>
+                                                <button type="submit" class="action-default scalable"
+                                                        onclick="return confirm('<?= $escaper->escapeJs(__('Are you sure you want to delete this ban?')) ?>')">
+                                                    <span><?= $escaper->escapeHtml(__('Delete')) ?></span>
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <div class="trident-api-info">
+            <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+        </div>
+    <?php endif; ?>
+</div>

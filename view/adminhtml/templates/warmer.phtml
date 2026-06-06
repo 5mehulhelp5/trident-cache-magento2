@@ -1,0 +1,190 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Warmer;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Warmer $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-warmer-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php $status = $viewModel->getStatus(); ?>
+        <?php if ($status === null): ?>
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Unable to connect to Trident API at %1. Please check the connection and credentials.', $viewModel->getApiUrl())) ?></span>
+            </div>
+        <?php else: ?>
+            <?php
+            $warmerEnabled = (bool)($status['enabled'] ?? false);
+            $state = (string)($status['state'] ?? 'idle');
+            $isRunning = $state === 'running';
+            $schedule = $status['schedule'] ?? null;
+            $nextRun = $status['next_scheduled_run'] ?? null;
+            $currentRun = $status['current_run'] ?? null;
+            $lastRun = $status['last_run'] ?? null;
+            ?>
+            <div class="trident-warmer-grid">
+                <!-- Warmer State -->
+                <div class="trident-card trident-card-overview">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Cache Warmer')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($warmerEnabled ? __('Enabled') : __('Disabled')) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Status')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml(ucfirst($state)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('State')) ?></span>
+                        </div>
+                        <?php if ($schedule !== null && $schedule !== ''): ?>
+                            <div class="trident-stat">
+                                <span class="trident-stat-value"><code><?= $escaper->escapeHtml((string)$schedule) ?></code></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Schedule')) ?></span>
+                            </div>
+                        <?php endif; ?>
+                        <?php if ($nextRun !== null && $nextRun !== ''): ?>
+                            <div class="trident-stat">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml((string)$nextRun) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Next Scheduled Run')) ?></span>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <!-- Current Run -->
+                <?php if ($isRunning && is_array($currentRun)): ?>
+                    <?php
+                    $curTotal = (int)($currentRun['total'] ?? 0);
+                    $curCompleted = (int)($currentRun['completed'] ?? 0);
+                    $curFailed = (int)($currentRun['failed'] ?? 0);
+                    $curBytes = (int)($currentRun['bytes_cached'] ?? 0);
+                    $curPercent = (float)($currentRun['percent'] ?? ($curTotal > 0 ? ($curCompleted / $curTotal) * 100 : 0));
+                    ?>
+                    <div class="trident-card trident-card-hits">
+                        <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Current Run')) ?></h3>
+                        <div class="trident-stats-row">
+                            <div class="trident-stat trident-stat-ratio">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatPercentage($curPercent)) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Progress')) ?></span>
+                            </div>
+                            <div class="trident-stat trident-stat-hit">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($curCompleted) . ' / ' . $viewModel->formatNumber($curTotal)) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Completed')) ?></span>
+                            </div>
+                            <div class="trident-stat trident-stat-miss">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($curFailed)) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Failed')) ?></span>
+                            </div>
+                            <div class="trident-stat">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes($curBytes)) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Bytes Cached')) ?></span>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
+                <!-- Last Run -->
+                <?php if (is_array($lastRun) && !empty($lastRun)): ?>
+                    <?php
+                    $lastTotal = (int)($lastRun['total'] ?? 0);
+                    $lastCompleted = (int)($lastRun['completed'] ?? 0);
+                    $lastFailed = (int)($lastRun['failed'] ?? 0);
+                    $lastBytes = (int)($lastRun['bytes_cached'] ?? 0);
+                    ?>
+                    <div class="trident-card trident-card-evictions">
+                        <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Last Run Summary')) ?></h3>
+                        <div class="trident-stats-row">
+                            <div class="trident-stat">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($lastCompleted) . ' / ' . $viewModel->formatNumber($lastTotal)) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Completed')) ?></span>
+                            </div>
+                            <div class="trident-stat">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($lastFailed)) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Failed')) ?></span>
+                            </div>
+                            <div class="trident-stat">
+                                <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes($lastBytes)) ?></span>
+                                <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Bytes Cached')) ?></span>
+                            </div>
+                            <?php if (!empty($lastRun['finished_at'])): ?>
+                                <div class="trident-stat">
+                                    <span class="trident-stat-value"><?= $escaper->escapeHtml((string)$lastRun['finished_at']) ?></span>
+                                    <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Finished At')) ?></span>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <div class="trident-warmer-grid">
+                <!-- Run Now -->
+                <div class="trident-card trident-card-purge-tags">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Run Warmer Now')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(__('Enter one URL per line (or comma-separated) to warm specific pages. Leave blank to warm all configured warmer sources.')) ?>
+                    </p>
+                    <form action="<?= $escaper->escapeUrl($block->getUrl('trident/warmer/run')) ?>" method="post" class="trident-form">
+                        <?= $block->getBlockHtml('formkey') ?>
+                        <div class="admin__field">
+                            <label class="admin__field-label" for="trident_warmer_urls">
+                                <span><?= $escaper->escapeHtml(__('URLs (optional)')) ?></span>
+                            </label>
+                            <div class="admin__field-control">
+                                <textarea id="trident_warmer_urls"
+                                          name="urls"
+                                          rows="6"
+                                          class="admin__control-textarea"
+                                          placeholder="<?= $escaper->escapeHtmlAttr(__("https://example.com/\nhttps://example.com/category.html")) ?>"></textarea>
+                            </div>
+                        </div>
+                        <button type="submit" class="action-default scalable primary">
+                            <span><?= $escaper->escapeHtml(__('Run Now')) ?></span>
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Cancel -->
+                <?php if ($isRunning): ?>
+                    <div class="trident-card trident-card-purge-all">
+                        <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Cancel Current Run')) ?></h3>
+                        <p class="trident-card-description">
+                            <?= $escaper->escapeHtml(__('Stop the warmer run that is currently in progress. Pages already warmed will remain cached.')) ?>
+                        </p>
+                        <form action="<?= $escaper->escapeUrl($block->getUrl('trident/warmer/cancel')) ?>" method="post">
+                            <?= $block->getBlockHtml('formkey') ?>
+                            <button type="submit" class="action-default scalable" onclick="return confirm('<?= $escaper->escapeJs(__('Are you sure you want to cancel the current warmer run?')) ?>')">
+                                <span><?= $escaper->escapeHtml(__('Cancel Run')) ?></span>
+                            </button>
+                        </form>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <div class="trident-api-info">
+                <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+            </div>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>

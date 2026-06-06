@@ -16,7 +16,7 @@ use Magento\Framework\View\Element\Block\ArgumentInterface;
 use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class Stats implements ArgumentInterface
+class Warmer implements ArgumentInterface
 {
     public function __construct(
         private readonly TridentClient $tridentClient,
@@ -37,17 +37,9 @@ class Stats implements ArgumentInterface
     /**
      * @return array<string, mixed>|null
      */
-    public function getStats(): ?array
+    public function getStatus(): ?array
     {
-        return $this->tridentClient->getStats();
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function getRules(): ?array
-    {
-        return $this->tridentClient->getRules();
+        return $this->tridentClient->getWarmerStatus();
     }
 
     public function getApiUrl(): string
@@ -71,63 +63,8 @@ class Stats implements ArgumentInterface
         return number_format($number, 0, '.', ',');
     }
 
-    /**
-     * @param int $limit
-     * @return array<string, mixed>|null
-     */
-    public function getTopUrls(int $limit = 10): ?array
-    {
-        return $this->tridentClient->getTopUrls($limit);
-    }
-
-    public function isSoftPurgeEnabled(): bool
-    {
-        return $this->config->isSoftPurgeEnabled();
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function getTridentHealth(): ?array
-    {
-        return $this->tridentClient->getHealth();
-    }
-
     public function formatPercentage(float $value): string
     {
         return number_format($value, 2) . '%';
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function getLatencyStats(): ?array
-    {
-        return $this->tridentClient->getLatencyStats();
-    }
-
-    /**
-     * @param int $limit
-     * @return array<string, mixed>|null
-     */
-    public function getErrorStats(int $limit = 20): ?array
-    {
-        return $this->tridentClient->getErrorStats($limit);
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function getProtectionStats(): ?array
-    {
-        return $this->tridentClient->getProtectionStats();
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function getMemory(): ?array
-    {
-        return $this->tridentClient->getMemory();
     }
 }

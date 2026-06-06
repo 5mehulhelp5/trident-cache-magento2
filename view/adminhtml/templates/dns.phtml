@@ -1,0 +1,104 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Dns;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Dns $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-dns-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php $backends = $viewModel->getBackends(); ?>
+
+        <div class="trident-card trident-card-dns-refresh">
+            <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Refresh DNS Discovery')) ?></h3>
+            <p class="trident-card-description">
+                <?= $escaper->escapeHtml(__('Force Trident to re-resolve the DNS names of all configured backends and refresh the discovered target addresses.')) ?>
+            </p>
+            <form action="<?= $escaper->escapeUrl($block->getUrl('trident/dns/refresh')) ?>" method="post">
+                <?= $block->getBlockHtml('formkey') ?>
+                <button type="submit" class="action-default scalable primary" onclick="return confirm('<?= $escaper->escapeJs(__('Are you sure you want to refresh DNS discovery?')) ?>')">
+                    <span><?= $escaper->escapeHtml(__('Refresh discovery')) ?></span>
+                </button>
+            </form>
+        </div>
+
+        <div class="trident-card trident-card-dns-backends">
+            <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Discovered Backends')) ?></h3>
+            <?php if (empty($backends)): ?>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('No discovered backends are available. DNS discovery may be disabled or no targets have been resolved yet.')) ?>
+                </p>
+            <?php else: ?>
+                <table class="trident-table admin__table-primary">
+                    <thead>
+                        <tr>
+                            <th><?= $escaper->escapeHtml(__('Name')) ?></th>
+                            <th><?= $escaper->escapeHtml(__('DNS Name')) ?></th>
+                            <th><?= $escaper->escapeHtml(__('Resolved Addresses')) ?></th>
+                            <th><?= $escaper->escapeHtml(__('Last Refresh')) ?></th>
+                            <th><?= $escaper->escapeHtml(__('Status')) ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($backends as $backend): ?>
+                            <?php
+                            $addresses = [];
+                            if (!empty($backend['resolved_addresses']) && is_array($backend['resolved_addresses'])) {
+                                $addresses = $backend['resolved_addresses'];
+                            }
+                            $healthy = !empty($backend['healthy']);
+                            ?>
+                            <tr>
+                                <td><?= $escaper->escapeHtml($backend['name'] ?? '-') ?></td>
+                                <td><?= $escaper->escapeHtml($backend['dns_name'] ?? '-') ?></td>
+                                <td>
+                                    <?php if (empty($addresses)): ?>
+                                        <?= $escaper->escapeHtml(__('No addresses resolved')) ?>
+                                    <?php else: ?>
+                                        <?php foreach ($addresses as $address): ?>
+                                            <code><?= $escaper->escapeHtml((string) $address) ?></code><br/>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                </td>
+                                <td><?= $escaper->escapeHtml($backend['last_refresh'] ?? '-') ?></td>
+                                <td>
+                                    <?php if ($healthy): ?>
+                                        <span class="grid-severity-notice"><span><?= $escaper->escapeHtml(__('Healthy')) ?></span></span>
+                                    <?php else: ?>
+                                        <span class="grid-severity-critical"><span><?= $escaper->escapeHtml(__('Unhealthy')) ?></span></span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+
+        <div class="trident-api-info">
+            <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+        </div>
+    <?php endif; ?>
+</div>

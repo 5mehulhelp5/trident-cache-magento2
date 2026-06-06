@@ -1,0 +1,185 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Launch;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Launch $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-launch-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php $status = $viewModel->getStatus(); ?>
+        <?php if ($status === null): ?>
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Unable to connect to Trident API at %1. Please check the connection and credentials.', $viewModel->getApiUrl())) ?></span>
+            </div>
+        <?php else: ?>
+            <?php
+            $active = (bool)($status['active'] ?? false);
+            $state = (string)($status['state'] ?? 'idle');
+            $startedAt = (string)($status['started_at'] ?? '');
+            $progress = is_array($status['progress'] ?? null) ? $status['progress'] : [];
+            $total = (int)($progress['total'] ?? 0);
+            $completed = (int)($progress['completed'] ?? 0);
+            $failed = (int)($progress['failed'] ?? 0);
+            $percent = (float)($progress['percent'] ?? 0);
+            ?>
+
+            <!-- Current State -->
+            <div class="trident-card trident-card-launch-state">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Launch Mode Status')) ?></h3>
+                <div class="trident-stats-row">
+                    <div class="trident-stat">
+                        <span class="trident-stat-value"><?= $escaper->escapeHtml($active ? __('Active') : __('Inactive')) ?></span>
+                        <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Launch Mode')) ?></span>
+                    </div>
+                    <div class="trident-stat">
+                        <span class="trident-stat-value"><?= $escaper->escapeHtml(ucfirst(str_replace('_', ' ', $state))) ?></span>
+                        <span class="trident-stat-label"><?= $escaper->escapeHtml(__('State')) ?></span>
+                    </div>
+                    <?php if ($startedAt !== ''): ?>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($startedAt) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Started At')) ?></span>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <?php if ($active): ?>
+                <!-- Progress -->
+                <div class="trident-card trident-card-launch-progress">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Warming Progress')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatPercentage($percent)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Complete')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($completed)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Completed')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($total)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Total')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($failed)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Failed')) ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="trident-card trident-card-launch-actions">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Launch Actions')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(__('Complete the launch to go live and stop serving the maintenance page, or abort to cancel launch mode.')) ?>
+                    </p>
+                    <form action="<?= $escaper->escapeUrl($block->getUrl('trident/launch/complete')) ?>" method="post" class="trident-form">
+                        <?= $block->getBlockHtml('formkey') ?>
+                        <button type="submit" class="action-default scalable primary" onclick="return confirm('<?= $escaper->escapeJs(__('Complete launch mode and go live?')) ?>')">
+                            <span><?= $escaper->escapeHtml(__('Complete (go live)')) ?></span>
+                        </button>
+                    </form>
+                    <form action="<?= $escaper->escapeUrl($block->getUrl('trident/launch/abort')) ?>" method="post" class="trident-form">
+                        <?= $block->getBlockHtml('formkey') ?>
+                        <div class="admin__field">
+                            <label class="admin__field-label" for="trident_launch_reason">
+                                <span><?= $escaper->escapeHtml(__('Abort Reason (optional)')) ?></span>
+                            </label>
+                            <div class="admin__field-control">
+                                <input type="text"
+                                       id="trident_launch_reason"
+                                       name="reason"
+                                       class="admin__control-text"
+                                       placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., wrong URL list')) ?>"/>
+                            </div>
+                        </div>
+                        <button type="submit" class="action-default scalable" onclick="return confirm('<?= $escaper->escapeJs(__('Abort launch mode?')) ?>')">
+                            <span><?= $escaper->escapeHtml(__('Abort')) ?></span>
+                        </button>
+                    </form>
+                </div>
+            <?php else: ?>
+                <!-- Start Launch -->
+                <div class="trident-card trident-card-launch-start">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Start Launch Mode')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(__('Launch mode warms the cache against a list of URLs while serving a maintenance page to visitors. When warming completes, complete the launch to go live.')) ?>
+                    </p>
+                    <form action="<?= $escaper->escapeUrl($block->getUrl('trident/launch/start')) ?>" method="post" class="trident-form">
+                        <?= $block->getBlockHtml('formkey') ?>
+                        <div class="admin__field">
+                            <label class="admin__field-label" for="trident_launch_urls">
+                                <span><?= $escaper->escapeHtml(__('URLs to Warm')) ?></span>
+                            </label>
+                            <div class="admin__field-control">
+                                <textarea id="trident_launch_urls"
+                                          name="urls"
+                                          rows="8"
+                                          class="admin__control-textarea"
+                                          placeholder="<?= $escaper->escapeHtmlAttr(__('One URL per line, e.g. https://example.com/')) ?>"></textarea>
+                            </div>
+                        </div>
+                        <div class="admin__field">
+                            <label class="admin__field-label" for="trident_launch_auto_complete">
+                                <span><?= $escaper->escapeHtml(__('Auto-complete')) ?></span>
+                            </label>
+                            <div class="admin__field-control">
+                                <input type="checkbox"
+                                       id="trident_launch_auto_complete"
+                                       name="auto_complete"
+                                       value="1"
+                                       class="admin__control-checkbox"/>
+                                <label for="trident_launch_auto_complete" class="admin__field-label">
+                                    <span><?= $escaper->escapeHtml(__('Automatically go live when warming finishes')) ?></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="admin__field">
+                            <label class="admin__field-label" for="trident_launch_bypass_ips">
+                                <span><?= $escaper->escapeHtml(__('Bypass IPs (optional)')) ?></span>
+                            </label>
+                            <div class="admin__field-control">
+                                <input type="text"
+                                       id="trident_launch_bypass_ips"
+                                       name="bypass_ips"
+                                       class="admin__control-text"
+                                       placeholder="<?= $escaper->escapeHtmlAttr(__('Comma-separated, e.g. 203.0.113.1, 198.51.100.2')) ?>"/>
+                            </div>
+                        </div>
+                        <button type="submit" class="action-default scalable primary" onclick="return confirm('<?= $escaper->escapeJs(__('Start launch mode now?')) ?>')">
+                            <span><?= $escaper->escapeHtml(__('Start launch')) ?></span>
+                        </button>
+                    </form>
+                </div>
+            <?php endif; ?>
+
+            <div class="trident-api-info">
+                <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+            </div>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>

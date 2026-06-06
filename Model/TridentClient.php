@@ -403,4 +403,423 @@ class TridentClient
             return null;
         }
     }
+
+    // =========================================================================
+    // Generic request helpers (used by the feature methods below)
+    // =========================================================================
+
+    /**
+     * @return array<string, string>
+     */
+    private function authHeaders(bool $json = false): array
+    {
+        $headers = ['Authorization' => 'Bearer ' . $this->config->getApiToken()];
+        if ($json) {
+            $headers['Content-Type'] = 'application/json';
+        }
+
+        return $headers;
+    }
+
+    /**
+     * Perform an authenticated GET and decode the JSON body.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function apiGet(string $path): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders($this->authHeaders());
+            $this->curl->get(rtrim($this->config->getApiUrl(), '/') . $path);
+
+            return json_decode($this->curl->getBody(), true);
+        } catch (\Exception $e) {
+            $this->logger->error('Trident GET failed', ['path' => $path, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Perform an authenticated POST with a JSON body and decode the response.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>|null
+     */
+    private function apiPost(string $path, array $data = []): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders($this->authHeaders(true));
+            $this->curl->post(rtrim($this->config->getApiUrl(), '/') . $path, json_encode($data));
+            $result = json_decode($this->curl->getBody(), true);
+
+            if ($this->config->isDebugEnabled()) {
+                $this->logger->info('Trident POST', ['path' => $path, 'data' => $data, 'result' => $result]);
+            }
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->logger->error('Trident POST failed', ['path' => $path, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Perform an authenticated DELETE and decode the JSON body.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function apiDelete(string $path): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders($this->authHeaders());
+            $this->curl->setOption(CURLOPT_CUSTOMREQUEST, 'DELETE');
+            $this->curl->get(rtrim($this->config->getApiUrl(), '/') . $path);
+
+            return json_decode($this->curl->getBody(), true);
+        } catch (\Exception $e) {
+            $this->logger->error('Trident DELETE failed', ['path' => $path, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    // =========================================================================
+    // Cache Warmer
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getWarmerStatus(): ?array
+    {
+        return $this->apiGet('/admin/warmer/status');
+    }
+
+    /**
+     * @param array<int, string> $urls Optional explicit URL list; empty = warm configured sources.
+     * @return array<string, mixed>|null
+     */
+    public function warmerRun(array $urls = []): ?array
+    {
+        $data = [];
+        if (!empty($urls)) {
+            $data['urls'] = array_values($urls);
+        }
+
+        return $this->apiPost('/admin/warmer/run', $data);
+    }
+
+    /**
+     * @param array<int, string> $urls
+     * @return array<string, mixed>|null
+     */
+    public function warmerQueue(array $urls): ?array
+    {
+        return $this->apiPost('/admin/warmer/queue', ['urls' => array_values($urls)]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function warmerCancel(): ?array
+    {
+        return $this->apiPost('/admin/warmer/cancel');
+    }
+
+    // =========================================================================
+    // Launch Mode
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getLaunchStatus(): ?array
+    {
+        return $this->apiGet('/admin/launch/status');
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>|null
+     */
+    public function launchStart(array $options = []): ?array
+    {
+        return $this->apiPost('/admin/launch/start', $options);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function launchComplete(): ?array
+    {
+        return $this->apiPost('/admin/launch/complete');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function launchAbort(?string $reason = null): ?array
+    {
+        $data = [];
+        if ($reason !== null && $reason !== '') {
+            $data['reason'] = $reason;
+        }
+
+        return $this->apiPost('/admin/launch/abort', $data);
+    }
+
+    // =========================================================================
+    // Reflect Mode
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getReflectStatus(): ?array
+    {
+        return $this->apiGet('/admin/reflect/status');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getReflectQueue(): ?array
+    {
+        return $this->apiGet('/admin/reflect/queue');
+    }
+
+    /**
+     * @param string $level full|selective|ttl_extension
+     * @return array<string, mixed>|null
+     */
+    public function reflectEnable(string $level = 'full', ?string $duration = null, ?string $reason = null): ?array
+    {
+        $data = ['level' => $level];
+        if ($duration !== null && $duration !== '') {
+            $data['duration'] = $duration;
+        }
+        if ($reason !== null && $reason !== '') {
+            $data['reason'] = $reason;
+        }
+
+        return $this->apiPost('/admin/reflect/enable', $data);
+    }
+
+    /**
+     * @param string $mode replay|hard
+     * @return array<string, mixed>|null
+     */
+    public function reflectDisable(string $mode = 'replay'): ?array
+    {
+        return $this->apiPost('/admin/reflect/disable', ['mode' => $mode]);
+    }
+
+    // =========================================================================
+    // Denoisers
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserReport(): ?array
+    {
+        return $this->apiGet('/admin/denoisers/report');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserQueryScopes(): ?array
+    {
+        return $this->apiGet('/admin/denoisers/query/scopes');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserPathZones(): ?array
+    {
+        return $this->apiGet('/admin/denoisers/path/zones');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserQueryPin(string $param, ?string $pathPrefix = null): ?array
+    {
+        $data = ['param' => $param];
+        if ($pathPrefix !== null && $pathPrefix !== '') {
+            $data['path_prefix'] = $pathPrefix;
+        }
+
+        return $this->apiPost('/admin/denoisers/query/pin', $data);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserQueryUnpin(string $param, ?string $pathPrefix = null): ?array
+    {
+        $data = ['param' => $param];
+        if ($pathPrefix !== null && $pathPrefix !== '') {
+            $data['path_prefix'] = $pathPrefix;
+        }
+
+        return $this->apiPost('/admin/denoisers/query/unpin', $data);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserQueryReset(): ?array
+    {
+        return $this->apiPost('/admin/denoisers/query/reset');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserPathPin(string $host, string $pathPrefix): ?array
+    {
+        return $this->apiPost('/admin/denoisers/path/pin', ['host' => $host, 'path_prefix' => $pathPrefix]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserPathUnpin(string $host, string $pathPrefix): ?array
+    {
+        return $this->apiPost('/admin/denoisers/path/unpin', ['host' => $host, 'path_prefix' => $pathPrefix]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserPathReset(): ?array
+    {
+        return $this->apiPost('/admin/denoisers/path/reset', []);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserWafExport(): ?array
+    {
+        return $this->apiGet('/admin/denoisers/export/waf');
+    }
+
+    // =========================================================================
+    // Bans (soft purge)
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getBans(): ?array
+    {
+        return $this->apiGet('/admin/bans');
+    }
+
+    /**
+     * @param string $type url|tag|host
+     * @return array<string, mixed>|null
+     */
+    public function createBan(string $pattern, string $type = 'url'): ?array
+    {
+        return $this->apiPost('/admin/bans', ['pattern' => $pattern, 'ban_type' => $type]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function deleteBan(string $id): ?array
+    {
+        return $this->apiDelete('/admin/bans/' . rawurlencode($id));
+    }
+
+    // =========================================================================
+    // Backends + connection pools
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getBackends(): ?array
+    {
+        return $this->apiGet('/admin/backends');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getBackendDetail(string $name): ?array
+    {
+        return $this->apiGet('/admin/backends/detail?' . http_build_query(['name' => $name]));
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getConnections(): ?array
+    {
+        return $this->apiGet('/admin/connections');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function drainBackend(string $name): ?array
+    {
+        return $this->apiPost('/admin/backends/drain', ['name' => $name]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function restoreBackend(string $name): ?array
+    {
+        return $this->apiPost('/admin/backends/restore', ['name' => $name]);
+    }
+
+    // =========================================================================
+    // DNS discovery
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getDiscovery(): ?array
+    {
+        return $this->apiGet('/admin/discovery');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDiscoveryDetail(string $name): ?array
+    {
+        return $this->apiGet('/admin/discovery/detail?' . http_build_query(['name' => $name]));
+    }
+
+    /** @return array<string, mixed>|null */
+    public function refreshDiscovery(): ?array
+    {
+        return $this->apiPost('/admin/discovery/refresh');
+    }
+
+    // =========================================================================
+    // Extended statistics + memory
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getLatencyStats(): ?array
+    {
+        return $this->apiGet('/admin/stats/latency');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getErrorStats(int $limit = 20): ?array
+    {
+        return $this->apiGet('/admin/stats/errors?' . http_build_query(['limit' => $limit]));
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getProtectionStats(): ?array
+    {
+        return $this->apiGet('/admin/stats/protection');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getMemory(): ?array
+    {
+        return $this->apiGet('/admin/memory');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getRefreshQueue(): ?array
+    {
+        return $this->apiGet('/admin/refresh/queue');
+    }
+
+    // =========================================================================
+    // Extended purge (host / vary)
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function purgeHost(string $host): ?array
+    {
+        return $this->apiPost('/admin/purge/host', [
+            'host' => $host,
+            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
+        ]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function purgeVary(string $header, string $value): ?array
+    {
+        return $this->apiPost('/admin/purge/vary', [
+            'header' => $header,
+            'value' => $value,
+            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
+        ]);
+    }
 }

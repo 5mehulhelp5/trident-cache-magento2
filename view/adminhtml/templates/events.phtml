@@ -1,0 +1,203 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Events;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Events $viewModel */
+$viewModel = $block->getData('view_model');
+$pollUrl = $block->getUrl('trident/events/poll');
+?>
+
+<div class="trident-events-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <div class="message message-notice">
+            <span><?= $escaper->escapeHtml(__('This is a poll-based view of the Trident event stream. The Magento admin cannot hold an open Server-Sent-Events connection, so this console polls a short window of the stream every few seconds.')) ?></span>
+        </div>
+
+        <div class="trident-card trident-card-events">
+            <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Live Events')) ?></h3>
+            <p class="trident-card-description">
+                <?= $escaper->escapeHtml(__('Select a stream to follow. Recent events are appended below as they are polled from Trident.')) ?>
+            </p>
+
+            <input type="hidden" id="trident-events-form-key" value="<?= $escaper->escapeHtmlAttr($block->getFormKey()) ?>"/>
+
+            <div class="trident-events-toolbar">
+                <div class="trident-events-streams" role="group">
+                    <button type="button" class="action-default trident-stream-btn _active" data-stream="requests"><span><?= $escaper->escapeHtml(__('Requests')) ?></span></button>
+                    <button type="button" class="action-default trident-stream-btn" data-stream="cache"><span><?= $escaper->escapeHtml(__('Cache')) ?></span></button>
+                    <button type="button" class="action-default trident-stream-btn" data-stream="backends"><span><?= $escaper->escapeHtml(__('Backends')) ?></span></button>
+                    <button type="button" class="action-default trident-stream-btn" data-stream="errors"><span><?= $escaper->escapeHtml(__('Errors')) ?></span></button>
+                </div>
+                <div class="trident-events-controls">
+                    <button type="button" id="trident-events-toggle" class="action-default primary"><span><?= $escaper->escapeHtml(__('Pause')) ?></span></button>
+                    <button type="button" id="trident-events-clear" class="action-default"><span><?= $escaper->escapeHtml(__('Clear')) ?></span></button>
+                </div>
+            </div>
+
+            <div class="trident-events-status">
+                <span id="trident-events-status-dot" class="trident-status-dot"></span>
+                <span id="trident-events-status-text"><?= $escaper->escapeHtml(__('Connecting...')) ?></span>
+            </div>
+
+            <div id="trident-events-stream" class="trident-stream" aria-live="polite"></div>
+        </div>
+
+        <div class="trident-api-info">
+            <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+        </div>
+
+        <script>
+            (function () {
+                'use strict';
+
+                var pollUrl = '<?= $escaper->escapeJs($pollUrl) ?>';
+                var formKey = document.getElementById('trident-events-form-key').value
+                    || (window.FORM_KEY || '');
+                var POLL_INTERVAL = 3000;
+                var BUFFER_CAP = 200;
+
+                var streamEl = document.getElementById('trident-events-stream');
+                var statusText = document.getElementById('trident-events-status-text');
+                var statusDot = document.getElementById('trident-events-status-dot');
+                var toggleBtn = document.getElementById('trident-events-toggle');
+                var clearBtn = document.getElementById('trident-events-clear');
+                var streamBtns = document.querySelectorAll('.trident-stream-btn');
+
+                var currentStream = 'requests';
+                var paused = false;
+                var timer = null;
+                var inFlight = false;
+
+                function setStatus(text, state) {
+                    statusText.textContent = text;
+                    statusDot.className = 'trident-status-dot' + (state ? ' trident-status-' + state : '');
+                }
+
+                function trimBuffer() {
+                    while (streamEl.childNodes.length > BUFFER_CAP) {
+                        streamEl.removeChild(streamEl.firstChild);
+                    }
+                }
+
+                function renderEvent(evt) {
+                    var row = document.createElement('div');
+                    row.className = 'trident-stream-row';
+
+                    var time = document.createElement('span');
+                    time.className = 'trident-stream-time';
+                    time.textContent = new Date().toLocaleTimeString();
+                    row.appendChild(time);
+
+                    var body = document.createElement('span');
+                    body.className = 'trident-stream-body';
+                    body.textContent = (typeof evt === 'string') ? evt : JSON.stringify(evt);
+                    row.appendChild(body);
+
+                    streamEl.appendChild(row);
+                    trimBuffer();
+                    streamEl.scrollTop = streamEl.scrollHeight;
+                }
+
+                function poll() {
+                    if (paused || inFlight) {
+                        return;
+                    }
+                    inFlight = true;
+
+                    var data = new FormData();
+                    data.append('form_key', formKey);
+                    data.append('stream', currentStream);
+
+                    fetch(pollUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        body: data
+                    }).then(function (resp) {
+                        return resp.json();
+                    }).then(function (json) {
+                        if (json && json.error) {
+                            setStatus(json.error, 'error');
+                        } else {
+                            setStatus('Live - ' + currentStream, 'ok');
+                        }
+                        if (json && json.events && json.events.length) {
+                            json.events.forEach(renderEvent);
+                        }
+                    }).catch(function (err) {
+                        setStatus('Poll failed: ' + err.message, 'error');
+                    }).finally(function () {
+                        inFlight = false;
+                    });
+                }
+
+                function start() {
+                    if (timer === null) {
+                        timer = window.setInterval(poll, POLL_INTERVAL);
+                    }
+                    poll();
+                }
+
+                function stop() {
+                    if (timer !== null) {
+                        window.clearInterval(timer);
+                        timer = null;
+                    }
+                }
+
+                toggleBtn.addEventListener('click', function () {
+                    paused = !paused;
+                    toggleBtn.querySelector('span').textContent = paused ? 'Resume' : 'Pause';
+                    if (paused) {
+                        stop();
+                        setStatus('Paused', 'paused');
+                    } else {
+                        start();
+                    }
+                });
+
+                clearBtn.addEventListener('click', function () {
+                    while (streamEl.firstChild) {
+                        streamEl.removeChild(streamEl.firstChild);
+                    }
+                });
+
+                streamBtns.forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        currentStream = btn.getAttribute('data-stream');
+                        streamBtns.forEach(function (b) {
+                            b.classList.remove('_active');
+                        });
+                        btn.classList.add('_active');
+                        if (!paused) {
+                            setStatus('Switching to ' + currentStream + '...', 'ok');
+                            poll();
+                        }
+                    });
+                });
+
+                start();
+            })();
+        </script>
+    <?php endif; ?>
+</div>

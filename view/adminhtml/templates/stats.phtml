@@ -176,6 +176,187 @@ $viewModel = $block->getData('view_model');
                 </div>
             <?php endif; ?>
 
+            <?php $latency = $viewModel->getLatencyStats(); ?>
+            <?php $latencyData = is_array($latency) ? ($latency['latency'] ?? $latency) : null; ?>
+            <?php if (is_array($latencyData) && !empty($latencyData)): ?>
+                <div class="trident-card trident-card-latency" style="grid-column: 1 / -1;">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Request Latency')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(__('Response time percentiles measured at the cache edge.')) ?>
+                    </p>
+                    <?php
+                    $p50 = $latencyData['p50_ms'] ?? null;
+                    $p90 = $latencyData['p90_ms'] ?? null;
+                    $p99 = $latencyData['p99_ms'] ?? null;
+                    $avgMs = $latencyData['avg_ms'] ?? null;
+                    $maxMs = $latencyData['max_ms'] ?? null;
+                    ?>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $p50 !== null ? $escaper->escapeHtml(number_format((float)$p50, 2) . ' ms') : '&mdash;' ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('p50')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $p90 !== null ? $escaper->escapeHtml(number_format((float)$p90, 2) . ' ms') : '&mdash;' ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('p90')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $p99 !== null ? $escaper->escapeHtml(number_format((float)$p99, 2) . ' ms') : '&mdash;' ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('p99')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $avgMs !== null ? $escaper->escapeHtml(number_format((float)$avgMs, 2) . ' ms') : '&mdash;' ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Average')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $maxMs !== null ? $escaper->escapeHtml(number_format((float)$maxMs, 2) . ' ms') : '&mdash;' ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Max')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($latencyData['request_count'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Requests')) ?></span>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php $memory = $viewModel->getMemory(); ?>
+            <?php $snapshot = is_array($memory) ? ($memory['snapshot'] ?? null) : null; ?>
+            <?php if (is_array($snapshot)): ?>
+                <?php
+                $allocator = $snapshot['allocator'] ?? [];
+                $rssBytes = (int)($allocator['rss_bytes'] ?? 0);
+                $trackedLogical = (int)($snapshot['tracked_logical_bytes'] ?? 0);
+                $trackedCapacity = (int)($snapshot['tracked_capacity_bytes'] ?? 0);
+                $untrackedFraction = (float)($snapshot['untracked_fraction'] ?? 0);
+                $categories = $snapshot['categories'] ?? [];
+                if (is_array($categories)) {
+                    usort($categories, static function (array $a, array $b): int {
+                        return (int)($b['logical_bytes'] ?? 0) <=> (int)($a['logical_bytes'] ?? 0);
+                    });
+                } else {
+                    $categories = [];
+                }
+                ?>
+                <div class="trident-card trident-card-memory" style="grid-column: 1 / -1;">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Memory')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes($rssBytes)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Resident Set Size')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes($trackedLogical)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Tracked Logical')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes($trackedCapacity)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Tracked Capacity')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatPercentage($untrackedFraction * 100)) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Untracked')) ?></span>
+                        </div>
+                    </div>
+                    <?php if (!empty($categories)): ?>
+                        <div class="trident-table-wrapper">
+                            <table class="admin__table-primary trident-table trident-memory-table">
+                                <thead>
+                                    <tr>
+                                        <th><?= $escaper->escapeHtml(__('Category')) ?></th>
+                                        <th class="trident-col-right"><?= $escaper->escapeHtml(__('Logical')) ?></th>
+                                        <th class="trident-col-right"><?= $escaper->escapeHtml(__('Capacity')) ?></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach (array_slice($categories, 0, 10) as $category): ?>
+                                        <tr>
+                                            <td><?= $escaper->escapeHtml((string)($category['name'] ?? '')) ?></td>
+                                            <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($category['logical_bytes'] ?? 0))) ?></td>
+                                            <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($category['capacity_bytes'] ?? 0))) ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php $protection = $viewModel->getProtectionStats(); ?>
+            <?php $backends = is_array($protection) ? ($protection['backends'] ?? null) : null; ?>
+            <?php if (is_array($backends) && !empty($backends)): ?>
+                <div class="trident-card trident-card-protection" style="grid-column: 1 / -1;">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Backend Protection')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(__('Origin protection state per backend (request collapsing, circuit breaking, throttling).')) ?>
+                    </p>
+                    <div class="trident-table-wrapper">
+                        <table class="admin__table-primary trident-table trident-protection-table">
+                            <thead>
+                                <tr>
+                                    <th><?= $escaper->escapeHtml(__('Backend')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Details')) ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($backends as $backendName => $backendData): ?>
+                                    <tr>
+                                        <td><code><?= $escaper->escapeHtml((string)$backendName) ?></code></td>
+                                        <td class="trident-col-right">
+                                            <?php if (is_array($backendData)): ?>
+                                                <?php $parts = [];
+                                                foreach ($backendData as $key => $val) {
+                                                    if (is_scalar($val) || $val === null) {
+                                                        $parts[] = (string)$key . ': ' . (is_bool($val) ? ($val ? 'yes' : 'no') : (string)$val);
+                                                    }
+                                                } ?>
+                                                <?= $escaper->escapeHtml(implode(', ', $parts)) ?>
+                                            <?php else: ?>
+                                                <?= $escaper->escapeHtml((string)$backendData) ?>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php $errorStats = $viewModel->getErrorStats(); ?>
+            <?php $errors = is_array($errorStats) ? ($errorStats['errors'] ?? []) : []; ?>
+            <?php if (is_array($errors) && !empty($errors)): ?>
+                <div class="trident-card trident-card-errors" style="grid-column: 1 / -1;">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Recent Errors')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(__('Total errors recorded: %1', $viewModel->formatNumber((int)($errorStats['total_errors'] ?? 0)))) ?>
+                    </p>
+                    <div class="trident-table-wrapper">
+                        <table class="admin__table-primary trident-table trident-errors-table">
+                            <thead>
+                                <tr>
+                                    <th><?= $escaper->escapeHtml(__('URL')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Status')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Count')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Last Occurred')) ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($errors as $error): ?>
+                                    <tr>
+                                        <td class="trident-col-url"><code><?= $escaper->escapeHtml((string)($error['url'] ?? '')) ?></code></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml((string)($error['status_code'] ?? '')) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($error['count'] ?? 0))) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml((string)($error['last_occurred'] ?? '')) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <div class="trident-api-info">
                 <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
             </div>

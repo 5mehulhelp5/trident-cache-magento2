@@ -1,0 +1,169 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Backends;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Backends $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-backends-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php $backendsData = $viewModel->getBackends(); ?>
+        <?php if ($backendsData === null): ?>
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Unable to connect to Trident API at %1. Please check the connection and credentials.', $viewModel->getApiUrl())) ?></span>
+            </div>
+        <?php else: ?>
+            <?php $backends = $backendsData['backends'] ?? []; ?>
+            <?php if (empty($backends)): ?>
+                <div class="message message-warning">
+                    <span><?= $escaper->escapeHtml(__('No backends are currently configured in Trident.')) ?></span>
+                </div>
+            <?php else: ?>
+                <div class="trident-backends-grid">
+                    <?php foreach ($backends as $backend): ?>
+                        <?php
+                        $name = (string)($backend['name'] ?? '');
+                        if ($name === '') {
+                            continue;
+                        }
+                        $url = (string)($backend['url'] ?? '');
+                        $isDrained = (bool)($backend['drained'] ?? false);
+                        $isHealthy = (bool)($backend['healthy'] ?? false);
+                        $weight = (int)($backend['weight'] ?? 0);
+
+                        $detail = $viewModel->getDetail($name);
+                        $totalRequests = (int)($detail['total_requests'] ?? 0);
+                        $errors = (int)($detail['errors'] ?? 0);
+                        $avgLatencyMs = (float)($detail['avg_latency_ms'] ?? 0);
+                        $activeConnections = (int)($detail['active_connections'] ?? 0);
+                        ?>
+                        <div class="trident-card trident-card-backend">
+                            <h3 class="trident-card-title">
+                                <?= $escaper->escapeHtml($name) ?>
+                                <?php if ($isDrained): ?>
+                                    <span class="trident-badge trident-badge-drained"><?= $escaper->escapeHtml(__('Drained')) ?></span>
+                                <?php elseif ($isHealthy): ?>
+                                    <span class="trident-badge trident-badge-healthy"><?= $escaper->escapeHtml(__('Healthy')) ?></span>
+                                <?php else: ?>
+                                    <span class="trident-badge trident-badge-unhealthy"><?= $escaper->escapeHtml(__('Unhealthy')) ?></span>
+                                <?php endif; ?>
+                            </h3>
+                            <?php if ($url !== ''): ?>
+                                <p class="trident-card-description"><code><?= $escaper->escapeHtml($url) ?></code></p>
+                            <?php endif; ?>
+
+                            <div class="trident-stats-row">
+                                <div class="trident-stat">
+                                    <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($weight)) ?></span>
+                                    <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Weight')) ?></span>
+                                </div>
+                                <div class="trident-stat">
+                                    <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($totalRequests)) ?></span>
+                                    <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Total Requests')) ?></span>
+                                </div>
+                                <div class="trident-stat">
+                                    <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($errors)) ?></span>
+                                    <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Errors')) ?></span>
+                                </div>
+                                <div class="trident-stat">
+                                    <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatMs($avgLatencyMs)) ?></span>
+                                    <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Avg Latency')) ?></span>
+                                </div>
+                                <div class="trident-stat">
+                                    <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($activeConnections)) ?></span>
+                                    <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Active Connections')) ?></span>
+                                </div>
+                            </div>
+
+                            <?php if ($isDrained): ?>
+                                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/backends/restore')) ?>" method="post">
+                                    <?= $block->getBlockHtml('formkey') ?>
+                                    <input type="hidden" name="name" value="<?= $escaper->escapeHtmlAttr($name) ?>"/>
+                                    <button type="submit" class="action-default scalable primary" onclick="return confirm('<?= $escaper->escapeJs(__('Restore backend "%1" to the pool?', $name)) ?>')">
+                                        <span><?= $escaper->escapeHtml(__('Restore')) ?></span>
+                                    </button>
+                                </form>
+                            <?php else: ?>
+                                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/backends/drain')) ?>" method="post">
+                                    <?= $block->getBlockHtml('formkey') ?>
+                                    <input type="hidden" name="name" value="<?= $escaper->escapeHtmlAttr($name) ?>"/>
+                                    <button type="submit" class="action-default scalable" onclick="return confirm('<?= $escaper->escapeJs(__('Drain backend "%1"? It will stop receiving new traffic.', $name)) ?>')">
+                                        <span><?= $escaper->escapeHtml(__('Drain')) ?></span>
+                                    </button>
+                                </form>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php $connections = $viewModel->getConnections(); ?>
+            <?php $pools = $connections['pools'] ?? []; ?>
+            <?php if ($connections !== null && !empty($pools)): ?>
+                <div class="trident-card trident-card-pools" style="grid-column: 1 / -1;">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Connection Pools')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($connections['total_active'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Total Active')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($connections['total_idle'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Total Idle')) ?></span>
+                        </div>
+                    </div>
+                    <div class="trident-table-wrapper">
+                        <table class="admin__table-primary trident-pools-table">
+                            <thead>
+                                <tr>
+                                    <th><?= $escaper->escapeHtml(__('Backend')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Active')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Idle')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Max')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Waiting')) ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($pools as $pool): ?>
+                                    <tr>
+                                        <td><?= $escaper->escapeHtml((string)($pool['backend'] ?? '')) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['active'] ?? 0))) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['idle'] ?? 0))) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['max_connections'] ?? 0))) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['waiting_requests'] ?? 0))) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <div class="trident-api-info">
+                <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+            </div>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>

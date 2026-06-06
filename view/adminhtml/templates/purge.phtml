@@ -71,6 +71,129 @@ $viewModel = $block->getData('view_model');
                 </form>
             </div>
 
+            <!-- Purge by Host -->
+            <div class="trident-card trident-card-purge-host">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Purge by Host')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Remove every cached entry for a given host (e.g. www.example.com). Useful for multi-store / multi-domain setups.')) ?>
+                </p>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/purgeHost')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_host">
+                            <span><?= $escaper->escapeHtml(__('Host')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_host"
+                                   name="host"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., www.example.com')) ?>"
+                                   required/>
+                        </div>
+                    </div>
+                    <button type="submit" class="action-default scalable" onclick="return confirm('<?= $escaper->escapeJs(__('Are you sure you want to purge all entries for this host?')) ?>')">
+                        <span><?= $escaper->escapeHtml(__('Purge Host')) ?></span>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Purge by Vary -->
+            <div class="trident-card trident-card-purge-vary">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Purge by Vary')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Remove cached variants matching a Vary header and value (e.g. header "X-Currency", value "EUR").')) ?>
+                </p>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/purgeVary')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_vary_header">
+                            <span><?= $escaper->escapeHtml(__('Vary Header')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_vary_header"
+                                   name="header"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., X-Currency')) ?>"
+                                   required/>
+                        </div>
+                    </div>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_vary_value">
+                            <span><?= $escaper->escapeHtml(__('Vary Value')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_vary_value"
+                                   name="value"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., EUR')) ?>"
+                                   required/>
+                        </div>
+                    </div>
+                    <button type="submit" class="action-default scalable">
+                        <span><?= $escaper->escapeHtml(__('Purge Vary')) ?></span>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Purge by Pattern -->
+            <div class="trident-card trident-card-purge-pattern">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Purge by URL Pattern')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Purge every cached URL matching a pattern (e.g. /catalog/* or *.html). Wildcards are supported.')) ?>
+                </p>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/purgePattern')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_pattern">
+                            <span><?= $escaper->escapeHtml(__('URL Pattern')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_pattern"
+                                   name="pattern"
+                                   class="admin__control-text"
+                                   placeholder="/catalog/*"/>
+                        </div>
+                    </div>
+                    <button type="submit" class="action-default scalable"
+                            onclick="return confirm('<?= $escaper->escapeJs(__('Purge all URLs matching this pattern?')) ?>')">
+                        <span><?= $escaper->escapeHtml(__('Purge Pattern')) ?></span>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Purge by URL -->
+            <div class="trident-card trident-card-purge-url">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Purge by URL')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Remove a single cached entry by its full URL or path (e.g. /catalog/product/view/id/42).')) ?>
+                </p>
+                <form id="trident-purge-url-form" class="trident-form"
+                      data-action="<?= $escaper->escapeHtmlAttr($block->getUrl('trident/cache/purgeEntry')) ?>">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_url">
+                            <span><?= $escaper->escapeHtml(__('URL')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_url"
+                                   name="url"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., /catalog/product/view/id/42')) ?>"
+                                   required/>
+                        </div>
+                    </div>
+                    <button type="submit" class="action-default scalable">
+                        <span><?= $escaper->escapeHtml(__('Purge URL')) ?></span>
+                    </button>
+                </form>
+                <p class="trident-purge-url-result" id="trident-purge-url-result" style="display:none;"></p>
+            </div>
+
             <!-- Common Tags Reference -->
             <div class="trident-card trident-card-reference">
                 <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Cache Tags Reference')) ?></h3>
@@ -118,5 +241,44 @@ $viewModel = $block->getData('view_model');
         <div class="trident-api-info">
             <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
         </div>
+
+        <script>
+            require(['jquery'], function ($) {
+                'use strict';
+
+                var $form = $('#trident-purge-url-form'),
+                    $result = $('#trident-purge-url-result');
+
+                $form.on('submit', function (event) {
+                    event.preventDefault();
+
+                    var url = $form.find('input[name="url"]').val(),
+                        formKey = $form.find('input[name="form_key"]').val();
+
+                    if (!url) {
+                        return;
+                    }
+
+                    $.ajax({
+                        url: $form.data('action'),
+                        type: 'POST',
+                        contentType: 'application/json',
+                        headers: {'X-Requested-With': 'XMLHttpRequest'},
+                        data: JSON.stringify({url: url, form_key: formKey}),
+                        showLoader: true
+                    }).done(function (response) {
+                        $result
+                            .text(response && response.message ? response.message : '')
+                            .css('color', response && response.success ? '#1a7d3c' : '#e02b27')
+                            .show();
+                    }).fail(function () {
+                        $result
+                            .text('<?= $escaper->escapeJs(__('Request failed. Please check the logs.')) ?>')
+                            .css('color', '#e02b27')
+                            .show();
+                    });
+                });
+            });
+        </script>
     <?php endif; ?>
 </div>

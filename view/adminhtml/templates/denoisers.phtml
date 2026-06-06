@@ -1,0 +1,241 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Denoisers;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Denoisers $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-denoisers-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php $report = $viewModel->getReport(); ?>
+        <?php if ($report === null): ?>
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Unable to connect to Trident API at %1. Please check the connection and credentials.', $viewModel->getApiUrl())) ?></span>
+            </div>
+        <?php else: ?>
+            <?php
+            $queryDenoiser = is_array($report['query_denoiser'] ?? null) ? $report['query_denoiser'] : [];
+            $pathDenoiser = is_array($report['path_denoiser'] ?? null) ? $report['path_denoiser'] : [];
+            ?>
+
+            <!-- Summary -->
+            <div class="trident-stats-grid">
+                <div class="trident-card trident-card-overview">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Query Denoiser')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(
+                            !empty($queryDenoiser['enabled'])
+                                ? __('Enabled — learns which query parameters are cache noise vs. signal.')
+                                : __('Disabled.')
+                        ) ?>
+                    </p>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($queryDenoiser['scopes'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Scopes')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($queryDenoiser['params_noise'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Noise Params')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($queryDenoiser['params_signal'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Signal Params')) ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="trident-card trident-card-overview">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Path Denoiser')) ?></h3>
+                    <p class="trident-card-description">
+                        <?= $escaper->escapeHtml(
+                            !empty($pathDenoiser['enabled'])
+                                ? __('Enabled — classifies path zones as dead, alive, or still learning.')
+                                : __('Disabled.')
+                        ) ?>
+                    </p>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat trident-stat-miss">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pathDenoiser['zones_dead'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Dead Zones')) ?></span>
+                        </div>
+                        <div class="trident-stat trident-stat-hit">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pathDenoiser['zones_alive'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Alive Zones')) ?></span>
+                        </div>
+                        <div class="trident-stat trident-stat-pass">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pathDenoiser['zones_learning'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Learning Zones')) ?></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Export WAF + global resets -->
+            <div class="trident-card">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Maintenance')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Export learned denoiser rules in the trident-waf-v1 format, or reset the learned state for either denoiser.')) ?>
+                </p>
+                <div class="trident-form">
+                    <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/exportWaf')) ?>" method="post" style="display:inline-block;">
+                        <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                        <button type="submit" class="action-default scalable primary">
+                            <span><?= $escaper->escapeHtml(__('Export WAF')) ?></span>
+                        </button>
+                    </form>
+                    <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/reset')) ?>" method="post" style="display:inline-block;">
+                        <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                        <input type="hidden" name="kind" value="query"/>
+                        <button type="submit" class="action-default scalable" onclick="return confirm('<?= $escaper->escapeJs(__('Reset all learned query denoiser scopes?')) ?>')">
+                            <span><?= $escaper->escapeHtml(__('Reset Query Denoiser')) ?></span>
+                        </button>
+                    </form>
+                    <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/reset')) ?>" method="post" style="display:inline-block;">
+                        <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                        <input type="hidden" name="kind" value="path"/>
+                        <button type="submit" class="action-default scalable" onclick="return confirm('<?= $escaper->escapeJs(__('Reset all learned path denoiser zones?')) ?>')">
+                            <span><?= $escaper->escapeHtml(__('Reset Path Denoiser')) ?></span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <?php $scopes = $viewModel->getQueryScopes(); ?>
+            <div class="trident-card trident-card-query-scopes" style="grid-column: 1 / -1;">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Query Scopes')) ?></h3>
+                <?php if (empty($scopes)): ?>
+                    <p class="trident-card-description"><?= $escaper->escapeHtml(__('No query scopes have been learned yet.')) ?></p>
+                <?php else: ?>
+                    <div class="trident-table-wrapper">
+                        <table class="admin__table-primary trident-table">
+                            <thead>
+                                <tr>
+                                    <th><?= $escaper->escapeHtml(__('Scope (host|path_prefix)')) ?></th>
+                                    <th><?= $escaper->escapeHtml(__('Noise Params')) ?></th>
+                                    <th><?= $escaper->escapeHtml(__('Signal Params')) ?></th>
+                                    <th><?= $escaper->escapeHtml(__('Actions')) ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($scopes as $scope): ?>
+                                    <?php
+                                    if (!is_array($scope)) {
+                                        continue;
+                                    }
+                                    $scopeKey = (string)($scope['scope_key'] ?? '');
+                                    $noise = is_array($scope['noise'] ?? null) ? $scope['noise'] : [];
+                                    $signal = is_array($scope['signal'] ?? null) ? $scope['signal'] : [];
+                                    $parts = explode('|', $scopeKey, 2);
+                                    $scopePathPrefix = $parts[1] ?? '';
+                                    ?>
+                                    <tr>
+                                        <td><code><?= $escaper->escapeHtml($scopeKey) ?></code></td>
+                                        <td><?= $escaper->escapeHtml($noise === [] ? '—' : implode(', ', $noise)) ?></td>
+                                        <td><?= $escaper->escapeHtml($signal === [] ? '—' : implode(', ', $signal)) ?></td>
+                                        <td class="trident-col-actions">
+                                            <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/pin')) ?>" method="post" class="trident-inline-form">
+                                                <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                                                <input type="hidden" name="kind" value="query"/>
+                                                <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($scopePathPrefix) ?>"/>
+                                                <input type="text" name="param" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('param')) ?>" required/>
+                                                <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin')) ?></span></button>
+                                            </form>
+                                            <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/unpin')) ?>" method="post" class="trident-inline-form">
+                                                <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                                                <input type="hidden" name="kind" value="query"/>
+                                                <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($scopePathPrefix) ?>"/>
+                                                <input type="text" name="param" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('param')) ?>" required/>
+                                                <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Unpin')) ?></span></button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <?php $zones = $viewModel->getPathZones(); ?>
+            <div class="trident-card trident-card-path-zones" style="grid-column: 1 / -1;">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Path Zones')) ?></h3>
+                <?php if (empty($zones)): ?>
+                    <p class="trident-card-description"><?= $escaper->escapeHtml(__('No path zones have been learned yet.')) ?></p>
+                <?php else: ?>
+                    <div class="trident-table-wrapper">
+                        <table class="admin__table-primary trident-table">
+                            <thead>
+                                <tr>
+                                    <th><?= $escaper->escapeHtml(__('Zone (host|path_prefix)')) ?></th>
+                                    <th><?= $escaper->escapeHtml(__('Decision')) ?></th>
+                                    <th><?= $escaper->escapeHtml(__('Actions')) ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($zones as $zone): ?>
+                                    <?php
+                                    if (!is_array($zone)) {
+                                        continue;
+                                    }
+                                    $zoneKey = (string)($zone['zone_key'] ?? '');
+                                    $status = (string)($zone['status'] ?? '');
+                                    $parts = explode('|', $zoneKey, 2);
+                                    $zoneHost = $parts[0] ?? '';
+                                    $zonePathPrefix = $parts[1] ?? '';
+                                    ?>
+                                    <tr>
+                                        <td><code><?= $escaper->escapeHtml($zoneKey) ?></code></td>
+                                        <td><span class="trident-zone-status trident-zone-<?= $escaper->escapeHtmlAttr($status) ?>"><?= $escaper->escapeHtml($status !== '' ? $status : '—') ?></span></td>
+                                        <td class="trident-col-actions">
+                                            <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/pin')) ?>" method="post" class="trident-inline-form">
+                                                <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                                                <input type="hidden" name="kind" value="path"/>
+                                                <input type="hidden" name="host" value="<?= $escaper->escapeHtmlAttr($zoneHost) ?>"/>
+                                                <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($zonePathPrefix) ?>"/>
+                                                <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin')) ?></span></button>
+                                            </form>
+                                            <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/unpin')) ?>" method="post" class="trident-inline-form">
+                                                <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                                                <input type="hidden" name="kind" value="path"/>
+                                                <input type="hidden" name="host" value="<?= $escaper->escapeHtmlAttr($zoneHost) ?>"/>
+                                                <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($zonePathPrefix) ?>"/>
+                                                <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Unpin')) ?></span></button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <div class="trident-api-info">
+                <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+            </div>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>
