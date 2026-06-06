@@ -48,7 +48,7 @@ class Disable extends Action
             if ($result !== null) {
                 if ($mode === 'hard') {
                     $this->messageManager->addSuccessMessage(
-                        __('Reflect mode disabled. Queued purges were dropped.')
+                        __('Reflect mode disabled. Deferred targets were soft-purged (marked stale for lazy revalidation).')
                     );
                 } else {
                     $this->messageManager->addSuccessMessage(
