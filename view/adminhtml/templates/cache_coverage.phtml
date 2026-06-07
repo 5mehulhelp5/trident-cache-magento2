@@ -1,0 +1,118 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\CacheCoverage;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var CacheCoverage $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-coverage-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php else: ?>
+        <p class="note">
+            <?= $escaper->escapeHtml(__('Paste a list of URLs (one per line) to check how many are currently cached. Host/scheme build the cache key — match them to how the URLs are actually served.')) ?>
+        </p>
+
+        <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/coverage')) ?>" method="post">
+            <input name="form_key" type="hidden" value="<?= $escaper->escapeHtmlAttr($viewModel->getFormKey()) ?>"/>
+            <fieldset class="admin__fieldset">
+                <div class="admin__field">
+                    <label class="admin__field-label"><?= $escaper->escapeHtml(__('URLs (one per line)')) ?></label>
+                    <div class="admin__field-control">
+                        <textarea name="urls" rows="8" class="admin__control-textarea"
+                                  placeholder="/&#10;/products&#10;https://shop.example/cart"><?= $escaper->escapeHtml($viewModel->getSubmittedUrls()) ?></textarea>
+                    </div>
+                </div>
+                <div class="admin__field">
+                    <label class="admin__field-label"><?= $escaper->escapeHtml(__('Host (optional)')) ?></label>
+                    <div class="admin__field-control">
+                        <input name="host" type="text" class="admin__control-text"
+                               value="<?= $escaper->escapeHtmlAttr($viewModel->getSubmittedHost()) ?>"
+                               placeholder="shop.example"/>
+                    </div>
+                </div>
+                <div class="admin__field">
+                    <label class="admin__field-label"><?= $escaper->escapeHtml(__('Scheme')) ?></label>
+                    <div class="admin__field-control">
+                        <?php $scheme = $viewModel->getSubmittedScheme(); ?>
+                        <select name="scheme" class="admin__control-select">
+                            <option value="https" <?= $scheme === 'https' ? 'selected' : '' ?>>https</option>
+                            <option value="http" <?= $scheme === 'http' ? 'selected' : '' ?>>http</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="admin__field">
+                    <div class="admin__field-control">
+                        <button type="submit" class="action-primary">
+                            <span><?= $escaper->escapeHtml(__('Check coverage')) ?></span>
+                        </button>
+                    </div>
+                </div>
+            </fieldset>
+        </form>
+
+        <?php $result = $viewModel->getResult(); ?>
+        <?php if ($result === null && trim($viewModel->getSubmittedUrls()) !== ''): ?>
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Could not retrieve coverage from the Trident admin API. Check the API URL and token.')) ?></span>
+            </div>
+        <?php elseif (is_array($result)): ?>
+            <?php
+            $total = (int) ($result['total'] ?? 0);
+            $cached = (int) ($result['cached'] ?? 0);
+            $uncached = (int) ($result['uncached'] ?? 0);
+            $percent = (float) ($result['percent_cached'] ?? 0.0);
+            $rows = is_array($result['results'] ?? null) ? $result['results'] : [];
+            ?>
+            <div class="trident-coverage-summary" style="margin:20px 0;">
+                <strong style="font-size:20px;"><?= $escaper->escapeHtml((string) $percent) ?>%</strong>
+                <?= $escaper->escapeHtml(__('cached')) ?>
+                &mdash;
+                <?= $escaper->escapeHtml(__('%1 of %2 cached, %3 missing', $viewModel->formatNumber($cached), $viewModel->formatNumber($total), $viewModel->formatNumber($uncached))) ?>
+            </div>
+            <table class="data-grid">
+                <thead>
+                    <tr>
+                        <th><?= $escaper->escapeHtml(__('URL')) ?></th>
+                        <th><?= $escaper->escapeHtml(__('Cached')) ?></th>
+                        <th><?= $escaper->escapeHtml(__('Status')) ?></th>
+                        <th><?= $escaper->escapeHtml(__('Age (s)')) ?></th>
+                        <th><?= $escaper->escapeHtml(__('TTL (s)')) ?></th>
+                        <th><?= $escaper->escapeHtml(__('Size')) ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($rows as $row): ?>
+                        <?php $isCached = (bool) ($row['cached'] ?? false); ?>
+                        <tr>
+                            <td><?= $escaper->escapeHtml((string) ($row['url'] ?? '')) ?></td>
+                            <td style="color:<?= $isCached ? '#1a7f37' : '#cc0000' ?>;">
+                                <?= $isCached ? $escaper->escapeHtml(__('yes')) : $escaper->escapeHtml(__('no')) ?>
+                            </td>
+                            <td><?= $escaper->escapeHtml((string) ($row['status'] ?? '—')) ?></td>
+                            <td><?= $escaper->escapeHtml(isset($row['age_s']) ? (string) $row['age_s'] : '—') ?></td>
+                            <td><?= $escaper->escapeHtml(isset($row['ttl_s']) ? (string) $row['ttl_s'] : '—') ?></td>
+                            <td><?= $escaper->escapeHtml(isset($row['size']) ? $viewModel->formatNumber((int) $row['size']) : '—') ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>

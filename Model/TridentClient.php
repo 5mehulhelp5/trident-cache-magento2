@@ -534,6 +534,35 @@ class TridentClient
     }
 
     // =========================================================================
+    // Cache Coverage
+    // =========================================================================
+
+    /**
+     * Batch cache-membership check: per-URL cached/not + aggregate percentage.
+     *
+     * @param array<int, string> $urls
+     * @return array<string, mixed>|null
+     */
+    public function cacheCoverage(
+        array $urls,
+        ?string $host = null,
+        string $scheme = 'https',
+        string $method = 'GET'
+    ): ?array {
+        $payload = [
+            'urls' => array_values($urls),
+            'scheme' => $scheme,
+            'method' => $method,
+        ];
+
+        if ($host !== null && $host !== '') {
+            $payload['host'] = $host;
+        }
+
+        return $this->apiPost('/admin/cache/coverage', $payload);
+    }
+
+    // =========================================================================
     // Launch Mode
     // =========================================================================
 

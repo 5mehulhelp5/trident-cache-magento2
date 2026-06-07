@@ -38,6 +38,13 @@
              action="trident/cache/tags"
              resource="Qoliber_TridentCache::stats"
              sortOrder="16"/>
+        <add id="Qoliber_TridentCache::coverage"
+             title="Cache Coverage"
+             module="Qoliber_TridentCache"
+             parent="Qoliber_TridentCache::trident"
+             action="trident/cache/coverage"
+             resource="Qoliber_TridentCache::stats"
+             sortOrder="17"/>
         <add id="Qoliber_TridentCache::purge"
              title="Purge Cache"
              module="Qoliber_TridentCache"
