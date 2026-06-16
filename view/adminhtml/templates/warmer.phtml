@@ -127,9 +127,9 @@ $viewModel = $block->getData('view_model');
                                 <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes($lastBytes)) ?></span>
                                 <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Bytes Cached')) ?></span>
                             </div>
-                            <?php if (!empty($lastRun['finished_at'])): ?>
+                            <?php if (!empty($lastRun['completed_at'])): ?>
                                 <div class="trident-stat">
-                                    <span class="trident-stat-value"><?= $escaper->escapeHtml((string)$lastRun['finished_at']) ?></span>
+                                    <span class="trident-stat-value"><?= $escaper->escapeHtml((string)$lastRun['completed_at']) ?></span>
                                     <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Finished At')) ?></span>
                                 </div>
                             <?php endif; ?>

@@ -48,16 +48,18 @@ $viewModel = $block->getData('view_model');
                         if ($name === '') {
                             continue;
                         }
-                        $url = (string)($backend['url'] ?? '');
-                        $isDrained = (bool)($backend['drained'] ?? false);
+                        $host = (string)($backend['host'] ?? '');
+                        $port = isset($backend['port']) ? (int)$backend['port'] : 0;
+                        $url = $host !== '' ? ($port > 0 ? $host . ':' . $port : $host) : '';
+                        $status = (string)($backend['status'] ?? '');
                         $isHealthy = (bool)($backend['healthy'] ?? false);
-                        $weight = (int)($backend['weight'] ?? 0);
+                        $isDrained = ($status === 'drained');
 
-                        $detail = $viewModel->getDetail($name);
-                        $totalRequests = (int)($detail['total_requests'] ?? 0);
-                        $errors = (int)($detail['errors'] ?? 0);
-                        $avgLatencyMs = (float)($detail['avg_latency_ms'] ?? 0);
-                        $activeConnections = (int)($detail['active_connections'] ?? 0);
+                        // BackendSummary already carries traffic + latency stats.
+                        $totalRequests = (int)($backend['total_requests'] ?? 0);
+                        $errors = (int)($backend['total_errors'] ?? 0);
+                        $avgLatencyMs = (float)($backend['avg_response_ms'] ?? 0);
+                        $activeConnections = (int)($backend['active_connections'] ?? 0);
                         ?>
                         <div class="trident-card trident-card-backend">
                             <h3 class="trident-card-title">
@@ -75,10 +77,6 @@ $viewModel = $block->getData('view_model');
                             <?php endif; ?>
 
                             <div class="trident-stats-row">
-                                <div class="trident-stat">
-                                    <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($weight)) ?></span>
-                                    <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Weight')) ?></span>
-                                </div>
                                 <div class="trident-stat">
                                     <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber($totalRequests)) ?></span>
                                     <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Total Requests')) ?></span>
@@ -120,7 +118,7 @@ $viewModel = $block->getData('view_model');
             <?php endif; ?>
 
             <?php $connections = $viewModel->getConnections(); ?>
-            <?php $pools = $connections['pools'] ?? []; ?>
+            <?php $pools = $connections['backends'] ?? []; ?>
             <?php if ($connections !== null && !empty($pools)): ?>
                 <div class="trident-card trident-card-pools" style="grid-column: 1 / -1;">
                     <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Connection Pools')) ?></h3>
@@ -142,17 +140,17 @@ $viewModel = $block->getData('view_model');
                                     <th class="trident-col-right"><?= $escaper->escapeHtml(__('Active')) ?></th>
                                     <th class="trident-col-right"><?= $escaper->escapeHtml(__('Idle')) ?></th>
                                     <th class="trident-col-right"><?= $escaper->escapeHtml(__('Max')) ?></th>
-                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Waiting')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Queued')) ?></th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($pools as $pool): ?>
                                     <tr>
-                                        <td><?= $escaper->escapeHtml((string)($pool['backend'] ?? '')) ?></td>
+                                        <td><?= $escaper->escapeHtml((string)($pool['name'] ?? '')) ?></td>
                                         <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['active'] ?? 0))) ?></td>
                                         <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['idle'] ?? 0))) ?></td>
-                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['max_connections'] ?? 0))) ?></td>
-                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['waiting_requests'] ?? 0))) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['max'] ?? 0))) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($pool['queued'] ?? 0))) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>

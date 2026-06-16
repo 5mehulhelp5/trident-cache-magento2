@@ -5,6 +5,40 @@ All notable changes to Qoliber_TridentCache will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+From v1.4.0 the module version tracks the Trident engine version it integrates
+with (e.g. module 1.4.0 ↔ Trident 1.4.0).
+
+## [1.4.0] - 2026-06-16
+
+> **Versioning:** this release realigns the module version with the Trident
+> engine — it pairs with **Trident 1.4.0**. The jump from 1.2.x to 1.4.0 syncs
+> the two; future releases will continue to match the engine version.
+
+### Fixed — admin API parity with Trident's OpenAPI spec
+
+The admin parity screens added in 1.2.0 were corrected to read Trident's actual
+admin-API response fields. Several referenced names that do not exist (so
+columns rendered blank or wrong), and two write calls used the wrong shape:
+
+- **DNS Discovery** — read `backend_name` / `hostname` / `addresses` /
+  `stats.last_success` (were `name` / `dns_name` / `resolved_addresses` /
+  `last_refresh`); "resolving" status is derived from resolved addresses.
+  `TridentClient::refreshDiscovery()` now sends the required `name` query param,
+  and the Refresh action re-resolves every discovered target.
+- **Bans** — read `ban_type` / `active` / `affected` (were `type` /
+  `expires_at`); `TridentClient::createBan()` sends `type` (was `ban_type`);
+  ban types are `url` / `tag` / `pattern` — the invalid `host` type was removed.
+- **Backends** — per-backend cards use `host:port` / `status` /
+  `total_requests` / `total_errors` / `avg_response_ms` / `active_connections`
+  (were `url` / `drained` / `weight` / `avg_latency_ms`); connection pools read
+  `name` / `max` / `queued` (were `backend` / `max_connections` /
+  `waiting_requests`).
+- **Cache Warmer** — last-run "Finished At" reads `completed_at` (was `finished_at`).
+- **Statistics** — latency request count reads `count` (was `request_count`).
+
+This brings the 1.2.0 admin feature parity and the 1.2.1 Cache Coverage screen
+(both below) to their first correctly-rendering release.
+
 ## [1.2.1] - 2026-06-07
 
 ### Added

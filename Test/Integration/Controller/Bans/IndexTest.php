@@ -50,10 +50,11 @@ class IndexTest extends TestCase
 
         $viewModel = new Bans($tridentClient, $config);
 
+        // Matches Trident's BanEntry: a ban is active/inactive (no expiry timestamp).
         $bans = [
-            ['id' => '1', 'pattern' => '/a', 'type' => 'url', 'expires_at' => null],
-            ['id' => '2', 'pattern' => '/b', 'type' => 'tag', 'expires_at' => time() + 3600],
-            ['id' => '3', 'pattern' => '/c', 'type' => 'host', 'expires_at' => time() - 3600],
+            ['id' => 1, 'pattern' => '/a', 'ban_type' => 'url', 'active' => true, 'affected' => 5],
+            ['id' => 2, 'pattern' => '/b', 'ban_type' => 'tag', 'active' => true, 'affected' => 0],
+            ['id' => 3, 'pattern' => '/c', 'ban_type' => 'pattern', 'active' => false, 'affected' => 3],
         ];
 
         $this->assertSame(2, $viewModel->countActive($bans));

@@ -64,25 +64,14 @@ class Bans implements ArgumentInterface
     }
 
     /**
-     * A ban is expired when expires_at is set and lies in the past.
+     * Trident's BanEntry has no expiry timestamp — a ban is either active or
+     * not. Treat an explicitly inactive ban as "expired".
      *
      * @param array<string, mixed> $ban
      */
     public function isExpired(array $ban): bool
     {
-        $expiresAt = $ban['expires_at'] ?? null;
-
-        if ($expiresAt === null || $expiresAt === '') {
-            return false;
-        }
-
-        $expiresTs = is_numeric($expiresAt) ? (int)$expiresAt : strtotime((string)$expiresAt);
-
-        if ($expiresTs === false || $expiresTs === 0) {
-            return false;
-        }
-
-        return $expiresTs < time();
+        return ($ban['active'] ?? true) === false;
     }
 
     /**

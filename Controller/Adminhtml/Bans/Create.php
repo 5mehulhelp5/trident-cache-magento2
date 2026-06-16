@@ -22,8 +22,8 @@ class Create extends Action
 {
     public const ADMIN_RESOURCE = 'Qoliber_TridentCache::bans';
 
-    /** @var array<int, string> */
-    private const ALLOWED_TYPES = ['url', 'tag', 'host'];
+    /** @var array<int, string> Trident BanType enum (single-target kinds exposed in the UI). */
+    private const ALLOWED_TYPES = ['url', 'tag', 'pattern'];
 
     public function __construct(
         Context $context,
@@ -45,7 +45,7 @@ class Create extends Action
         }
 
         if (!in_array($type, self::ALLOWED_TYPES, true)) {
-            $this->messageManager->addErrorMessage(__('Invalid ban type. Allowed types: url, tag, host.'));
+            $this->messageManager->addErrorMessage(__('Invalid ban type. Allowed types: url, tag, pattern.'));
             return $resultRedirect->setPath('trident/bans/index');
         }
 

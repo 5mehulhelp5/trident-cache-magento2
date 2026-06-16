@@ -213,7 +213,7 @@ $viewModel = $block->getData('view_model');
                             <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Max')) ?></span>
                         </div>
                         <div class="trident-stat">
-                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($latencyData['request_count'] ?? 0))) ?></span>
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($latencyData['count'] ?? 0))) ?></span>
                             <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Requests')) ?></span>
                         </div>
                     </div>

@@ -35,15 +35,42 @@ class Refresh extends Action
         $resultRedirect = $this->resultRedirectFactory->create();
 
         try {
-            $result = $this->tridentClient->refreshDiscovery();
+            // /admin/discovery/refresh refreshes a single target by name, so
+            // re-resolve every discovered backend in turn.
+            $discovery = $this->tridentClient->getDiscovery();
+            $backends = (is_array($discovery) && isset($discovery['backends']) && is_array($discovery['backends']))
+                ? $discovery['backends']
+                : [];
 
-            if ($result !== null) {
+            if (empty($backends)) {
+                $this->messageManager->addErrorMessage(
+                    __('No discovered backends are available to refresh.')
+                );
+                return $resultRedirect->setPath('trident/dns/index');
+            }
+
+            $refreshed = 0;
+            $failed = 0;
+            foreach ($backends as $backend) {
+                $name = is_array($backend) ? (string)($backend['backend_name'] ?? '') : '';
+                if ($name === '') {
+                    continue;
+                }
+                $result = $this->tridentClient->refreshDiscovery($name);
+                if ($result !== null && ($result['success'] ?? true) !== false) {
+                    $refreshed++;
+                } else {
+                    $failed++;
+                }
+            }
+
+            if ($failed === 0) {
                 $this->messageManager->addSuccessMessage(
-                    __('DNS discovery refresh triggered successfully.')
+                    __('DNS discovery refreshed for %1 target(s).', $refreshed)
                 );
             } else {
                 $this->messageManager->addErrorMessage(
-                    __('Failed to refresh DNS discovery. Please check the logs.')
+                    __('Refreshed %1 target(s), %2 failed. Please check the logs.', $refreshed, $failed)
                 );
             }
         } catch (\Exception $e) {

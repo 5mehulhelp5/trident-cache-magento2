@@ -725,12 +725,13 @@ class TridentClient
     }
 
     /**
-     * @param string $type url|tag|host
+     * @param string $type url|tag|pattern|bulkurl|tags (Trident BanType enum)
      * @return array<string, mixed>|null
      */
     public function createBan(string $pattern, string $type = 'url'): ?array
     {
-        return $this->apiPost('/admin/bans', ['pattern' => $pattern, 'ban_type' => $type]);
+        // The /admin/bans request body field is `type` (serde rename of ban_type).
+        return $this->apiPost('/admin/bans', ['pattern' => $pattern, 'type' => $type]);
     }
 
     /** @return array<string, mixed>|null */
@@ -789,10 +790,15 @@ class TridentClient
         return $this->apiGet('/admin/discovery/detail?' . http_build_query(['name' => $name]));
     }
 
-    /** @return array<string, mixed>|null */
-    public function refreshDiscovery(): ?array
+    /**
+     * Force a DNS re-resolve for a single discovery target. Trident's
+     * /admin/discovery/refresh requires the backend `name` as a query param.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function refreshDiscovery(string $name): ?array
     {
-        return $this->apiPost('/admin/discovery/refresh');
+        return $this->apiPost('/admin/discovery/refresh?' . http_build_query(['name' => $name]));
     }
 
     // =========================================================================

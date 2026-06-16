@@ -48,7 +48,7 @@ $viewModel = $block->getData('view_model');
                     </div>
                     <div class="trident-stat">
                         <span class="trident-stat-value"><?= $escaper->escapeHtml((string)$expiredCount) ?></span>
-                        <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Expired Bans')) ?></span>
+                        <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Inactive Bans')) ?></span>
                     </div>
                 </div>
             </div>
@@ -57,7 +57,7 @@ $viewModel = $block->getData('view_model');
             <div class="trident-card trident-card-create-ban">
                 <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Create Ban')) ?></h3>
                 <p class="trident-card-description">
-                    <?= $escaper->escapeHtml(__('Enter a pattern to ban. The type determines how the pattern is matched: by URL, by cache tag, or by host.')) ?>
+                    <?= $escaper->escapeHtml(__('Enter a pattern to ban. The type determines how the pattern is matched: by URL, by cache tag, or by URL pattern.')) ?>
                 </p>
                 <form action="<?= $escaper->escapeUrl($block->getUrl('trident/bans/create')) ?>" method="post" class="trident-form">
                     <?= $block->getBlockHtml('formkey') ?>
@@ -82,7 +82,7 @@ $viewModel = $block->getData('view_model');
                             <select id="trident_ban_type" name="type" class="admin__control-select">
                                 <option value="url"><?= $escaper->escapeHtml(__('URL')) ?></option>
                                 <option value="tag"><?= $escaper->escapeHtml(__('Tag')) ?></option>
-                                <option value="host"><?= $escaper->escapeHtml(__('Host')) ?></option>
+                                <option value="pattern"><?= $escaper->escapeHtml(__('Pattern')) ?></option>
                             </select>
                         </div>
                     </div>
@@ -107,8 +107,9 @@ $viewModel = $block->getData('view_model');
                             <tr>
                                 <th><?= $escaper->escapeHtml(__('Pattern')) ?></th>
                                 <th><?= $escaper->escapeHtml(__('Type')) ?></th>
+                                <th><?= $escaper->escapeHtml(__('Affected')) ?></th>
                                 <th><?= $escaper->escapeHtml(__('Created At')) ?></th>
-                                <th><?= $escaper->escapeHtml(__('Expires At')) ?></th>
+                                <th><?= $escaper->escapeHtml(__('Status')) ?></th>
                                 <th><?= $escaper->escapeHtml(__('Action')) ?></th>
                             </tr>
                         </thead>
@@ -117,9 +118,9 @@ $viewModel = $block->getData('view_model');
                                 <?php
                                 $id = (string)($ban['id'] ?? '');
                                 $pattern = (string)($ban['pattern'] ?? '');
-                                $type = (string)($ban['type'] ?? 'url');
+                                $type = (string)($ban['ban_type'] ?? 'url');
                                 $createdAt = (string)($ban['created_at'] ?? '');
-                                $expiresAt = (string)($ban['expires_at'] ?? '');
+                                $affected = (int)($ban['affected'] ?? 0);
                                 $expired = $viewModel->isExpired($ban);
                                 ?>
                                 <tr class="<?= $expired ? 'trident-ban-expired' : 'trident-ban-active' ?>">
@@ -129,15 +130,13 @@ $viewModel = $block->getData('view_model');
                                             <?= $escaper->escapeHtml($type) ?>
                                         </span>
                                     </td>
+                                    <td><?= $escaper->escapeHtml(number_format($affected)) ?></td>
                                     <td><?= $escaper->escapeHtml($createdAt !== '' ? $createdAt : '—') ?></td>
                                     <td>
-                                        <?php if ($expiresAt === ''): ?>
-                                            <?= $escaper->escapeHtml(__('Never')) ?>
+                                        <?php if ($expired): ?>
+                                            <span class="trident-badge trident-badge-expired"><?= $escaper->escapeHtml(__('inactive')) ?></span>
                                         <?php else: ?>
-                                            <?= $escaper->escapeHtml($expiresAt) ?>
-                                            <?php if ($expired): ?>
-                                                <span class="trident-badge trident-badge-expired"><?= $escaper->escapeHtml(__('expired')) ?></span>
-                                            <?php endif; ?>
+                                            <span class="trident-badge trident-badge-healthy"><?= $escaper->escapeHtml(__('active')) ?></span>
                                         <?php endif; ?>
                                     </td>
                                     <td>

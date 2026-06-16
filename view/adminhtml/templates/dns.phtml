@@ -57,7 +57,7 @@ $viewModel = $block->getData('view_model');
                             <th><?= $escaper->escapeHtml(__('Name')) ?></th>
                             <th><?= $escaper->escapeHtml(__('DNS Name')) ?></th>
                             <th><?= $escaper->escapeHtml(__('Resolved Addresses')) ?></th>
-                            <th><?= $escaper->escapeHtml(__('Last Refresh')) ?></th>
+                            <th><?= $escaper->escapeHtml(__('Last Success')) ?></th>
                             <th><?= $escaper->escapeHtml(__('Status')) ?></th>
                         </tr>
                     </thead>
@@ -65,14 +65,19 @@ $viewModel = $block->getData('view_model');
                         <?php foreach ($backends as $backend): ?>
                             <?php
                             $addresses = [];
-                            if (!empty($backend['resolved_addresses']) && is_array($backend['resolved_addresses'])) {
-                                $addresses = $backend['resolved_addresses'];
+                            if (!empty($backend['addresses']) && is_array($backend['addresses'])) {
+                                $addresses = $backend['addresses'];
                             }
-                            $healthy = !empty($backend['healthy']);
+                            // DiscoveryInfo has no health flag; a target with
+                            // resolved addresses is considered resolving/healthy.
+                            $healthy = !empty($addresses);
+                            $hostname = (string)($backend['hostname'] ?? '-');
+                            $port = isset($backend['port']) ? (int)$backend['port'] : 0;
+                            $lastSuccess = $backend['stats']['last_success'] ?? null;
                             ?>
                             <tr>
-                                <td><?= $escaper->escapeHtml($backend['name'] ?? '-') ?></td>
-                                <td><?= $escaper->escapeHtml($backend['dns_name'] ?? '-') ?></td>
+                                <td><?= $escaper->escapeHtml($backend['backend_name'] ?? '-') ?></td>
+                                <td><?= $escaper->escapeHtml($port > 0 ? $hostname . ':' . $port : $hostname) ?></td>
                                 <td>
                                     <?php if (empty($addresses)): ?>
                                         <?= $escaper->escapeHtml(__('No addresses resolved')) ?>
@@ -82,12 +87,12 @@ $viewModel = $block->getData('view_model');
                                         <?php endforeach; ?>
                                     <?php endif; ?>
                                 </td>
-                                <td><?= $escaper->escapeHtml($backend['last_refresh'] ?? '-') ?></td>
+                                <td><?= $escaper->escapeHtml($lastSuccess !== null && $lastSuccess !== '' ? (string)$lastSuccess : '-') ?></td>
                                 <td>
                                     <?php if ($healthy): ?>
-                                        <span class="grid-severity-notice"><span><?= $escaper->escapeHtml(__('Healthy')) ?></span></span>
+                                        <span class="grid-severity-notice"><span><?= $escaper->escapeHtml(__('Resolving')) ?></span></span>
                                     <?php else: ?>
-                                        <span class="grid-severity-critical"><span><?= $escaper->escapeHtml(__('Unhealthy')) ?></span></span>
+                                        <span class="grid-severity-critical"><span><?= $escaper->escapeHtml(__('Unresolved')) ?></span></span>
                                     <?php endif; ?>
                                 </td>
                             </tr>
