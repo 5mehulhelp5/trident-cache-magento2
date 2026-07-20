@@ -17,11 +17,49 @@ use Psr\Log\LoggerInterface;
 
 class TridentClient
 {
+    /** Total request timeout (seconds) — guards against a wedged Trident admin port. */
+    private const REQUEST_TIMEOUT = 10;
+
+    /** Connection-establishment timeout (seconds). */
+    private const CONNECT_TIMEOUT = 5;
+
     public function __construct(
         private readonly Curl $curl,
         private readonly LoggerInterface $logger,
         private readonly Config $config
     ) {
+    }
+
+    /**
+     * Prepare the shared Curl handle for a request: apply an explicit timeout and
+     * pin the HTTP verb, so state from a prior call (notably a DELETE's
+     * CURLOPT_CUSTOMREQUEST) cannot leak into this one.
+     *
+     * @param string $method GET|POST
+     */
+    private function prepareRequest(string $method): void
+    {
+        $this->curl->setOptions([
+            CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT,
+            CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
+            CURLOPT_CUSTOMREQUEST => $method,
+        ]);
+    }
+
+    /**
+     * Surface a non-2xx admin response instead of silently swallowing it. Magento's
+     * Curl does not throw on an HTTP error status, so a 401 (bad/expired api_token)
+     * or 5xx would otherwise be lost.
+     */
+    private function logHttpError(string $context): void
+    {
+        $status = (int) $this->curl->getStatus();
+        if ($status >= 400) {
+            $this->logger->error('Trident admin request failed', [
+                'context' => $context,
+                'status' => $status,
+            ]);
+        }
     }
 
     public function isEnabled(): bool
@@ -201,6 +239,60 @@ class TridentClient
             $this->logger->error('Trident health check failed', ['error' => $e->getMessage()]);
             return null;
         }
+    }
+
+    /**
+     * Trident 1.5.0 license / degraded-mode status: GET /admin/status.
+     *
+     * Returns ['status','version','license','mode'] where `mode` is 'licensed'
+     * (caching active), 'degraded' (license check failed → pass-through, no
+     * caching), or 'unknown'. Distinct from getHealth() (mere reachability).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getStatus(): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders([
+                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+            ]);
+
+            $this->prepareRequest('GET');
+
+            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->curl->get($apiUrl . '/admin/status');
+            $this->logHttpError('GET /admin/status');
+
+            return json_decode($this->curl->getBody(), true);
+        } catch (\Exception $e) {
+            $this->logger->error('Trident status check failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Trident 1.5.0 dry-run cacheability diagnostic: POST /admin/explain.
+     *
+     * Answers "will this request cache, and if not, why?" without mutating the
+     * cache. Useful for debugging why a Magento page/URL is not being cached.
+     *
+     * @param array<string, string> $headers
+     * @return array<string, mixed>|null
+     */
+    public function explain(string $method, string $url, array $headers = [], bool $detail = true): ?array
+    {
+        return $this->apiPost('/admin/explain', [
+            'method' => $method,
+            'url' => $url,
+            // Cast so an empty header set serialises as {} (object), not [] —
+            // Trident's ExplainRequest.headers is a map.
+            'headers' => (object) $headers,
+            'detail' => $detail,
+        ]);
     }
 
     /**
@@ -457,7 +549,9 @@ class TridentClient
 
         try {
             $this->curl->setHeaders($this->authHeaders(true));
+            $this->prepareRequest('POST');
             $this->curl->post(rtrim($this->config->getApiUrl(), '/') . $path, json_encode($data));
+            $this->logHttpError('POST ' . $path);
             $result = json_decode($this->curl->getBody(), true);
 
             if ($this->config->isDebugEnabled()) {
@@ -854,6 +948,24 @@ class TridentClient
         return $this->apiPost('/admin/purge/vary', [
             'header' => $header,
             'value' => $value,
+            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
+        ]);
+    }
+
+    /**
+     * Trident 1.5.0 tag-pattern purge: POST /admin/purge/tag/pattern.
+     *
+     * Purge every entry whose tag matches a wildcard (default) or regex pattern
+     * — e.g. `catalog_product_*` or `cat_c_*`. Distinct from purgePattern(),
+     * which matches URL globs via /admin/purge/urls.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function purgeTagPattern(string $pattern, bool $regex = false): ?array
+    {
+        return $this->apiPost('/admin/purge/tag/pattern', [
+            'pattern' => $pattern,
+            'pattern_type' => $regex ? 'regex' : 'wildcard',
             'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
         ]);
     }
