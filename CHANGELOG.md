@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 From v1.4.0 the module version tracks the Trident engine version it integrates
 with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
+## [1.5.2] - 2026-07-23
+
+> **Versioning:** re-syncs the module to the current engine — it pairs with
+> **Trident 1.5.2**. The jump from 1.4.0 to 1.5.2 folds in the 1.5.0
+> observability admin-API surface (built earlier but never released) plus the
+> client-reliability fixes below.
+
+### Added — Trident 1.5.0 observability admin surface
+- Admin screens + `TridentClient` methods for the 1.5.x admin API: **status**
+  (`/admin/status`), **explain** (`/admin/explain`), **Reflect** (status/queue/
+  enable/disable), **Launch**, **Cache Warmer**, **Backends** (drain/restore),
+  **Bans**, **DNS discovery**, and **Denoisers** — matching Trident's OpenAPI
+  spec. Integration test coverage for the client, config, observers, and plugins.
+
+### Fixed — admin-API client reliability (`Model/TridentClient.php`)
+- **Every request now applies connect + read timeouts** (5s/10s). Previously
+  most methods (including the observer-triggered `purgeTags`/`purgeAll` that run
+  synchronously on the storefront) issued curl calls with no timeout, so an
+  unreachable or wedged Trident admin port could hang a Magento admin save or a
+  storefront `Type::clean`.
+- **The shared-Curl DELETE verb can no longer leak.** Every request re-pins
+  `CURLOPT_CUSTOMREQUEST` via `prepareRequest()`, so a prior DELETE cannot cause
+  a following GET/POST on the injected singleton Curl to be issued as a DELETE.
+- **The admin API token is now required to enable purges.** With FPC on engine 3
+  but no `api_token` set, the client no longer fires empty-`Bearer` 401s that
+  were swallowed into permanent stale content — it disables cleanly and logs one
+  distinct, debug-independent warning so the misconfiguration is visible.
+- **Non-2xx admin responses are logged** (401/5xx) instead of being silently
+  discarded, on every request path.
+
+### Known follow-ups (not in this release)
+- POST-gate the mutating admin controllers (`HttpPostActionInterface`) and add a
+  `form_key` to each admin POST form — requires validation in a Magento
+  environment; adminhtml URL secret-keys already provide CSRF protection.
+- Align tag casing between the two purge trigger paths.
+- Remove dead surfaces (`PurgeStrategy` is `ENABLED=false`; `ttl_static` is read
+  but never applied).
+
 ## [1.4.0] - 2026-06-16
 
 > **Versioning:** this release realigns the module version with the Trident

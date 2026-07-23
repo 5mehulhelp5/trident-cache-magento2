@@ -23,6 +23,9 @@ class TridentClient
     /** Connection-establishment timeout (seconds). */
     private const CONNECT_TIMEOUT = 5;
 
+    /** Emit the "engine 3 but no token" warning at most once per PHP request. */
+    private static bool $tokenMissingLogged = false;
+
     public function __construct(
         private readonly Curl $curl,
         private readonly LoggerInterface $logger,
@@ -64,7 +67,25 @@ class TridentClient
 
     public function isEnabled(): bool
     {
-        return $this->config->isTridentEnabled() && !empty($this->config->getApiUrl());
+        // Require an API token: the admin API is Bearer-authenticated, so calling
+        // it without one just fires empty-Bearer 401s that are then swallowed into
+        // permanent stale content. Gate them out cleanly and surface a distinct,
+        // debug-independent warning once so the misconfiguration is visible.
+        if (!$this->config->isTridentEnabled() || empty($this->config->getApiUrl())) {
+            return false;
+        }
+        if ($this->config->getApiToken() === '') {
+            if (!self::$tokenMissingLogged) {
+                self::$tokenMissingLogged = true;
+                $this->logger->warning(
+                    'Trident FPC is enabled (engine 3) but no admin api_token is set — '
+                    . 'purges and admin calls are disabled until a token is configured.'
+                );
+            }
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -102,6 +123,7 @@ class TridentClient
             $payload = json_encode($data);
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/purge/tags', $payload);
 
             $response = $this->curl->getBody();
@@ -144,6 +166,7 @@ class TridentClient
             ]);
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/cache/clear', json_encode(['confirm' => true]));
 
             $response = $this->curl->getBody();
@@ -177,6 +200,7 @@ class TridentClient
             ]);
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/stats');
 
             $response = $this->curl->getBody();
@@ -204,6 +228,7 @@ class TridentClient
             ]);
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/rules');
 
             $response = $this->curl->getBody();
@@ -231,6 +256,7 @@ class TridentClient
             ]);
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/health');
 
             $response = $this->curl->getBody();
@@ -321,6 +347,7 @@ class TridentClient
             }
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/cache/entries?' . http_build_query($params));
 
             $response = $this->curl->getBody();
@@ -357,6 +384,7 @@ class TridentClient
             }
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/cache/tags?' . http_build_query($params));
 
             $response = $this->curl->getBody();
@@ -388,6 +416,7 @@ class TridentClient
             $params = ['limit' => $limit, 'sort' => $sort];
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/stats/top?' . http_build_query($params));
 
             $response = $this->curl->getBody();
@@ -427,6 +456,7 @@ class TridentClient
             }
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/purge/url', json_encode($data));
 
             $response = $this->curl->getBody();
@@ -474,6 +504,7 @@ class TridentClient
             ]);
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/purge/urls', $payload);
 
             $response = $this->curl->getBody();
@@ -526,7 +557,9 @@ class TridentClient
 
         try {
             $this->curl->setHeaders($this->authHeaders());
+            $this->prepareRequest('GET');
             $this->curl->get(rtrim($this->config->getApiUrl(), '/') . $path);
+            $this->logHttpError('GET ' . $path);
 
             return json_decode($this->curl->getBody(), true);
         } catch (\Exception $e) {
@@ -578,8 +611,12 @@ class TridentClient
 
         try {
             $this->curl->setHeaders($this->authHeaders());
-            $this->curl->setOption(CURLOPT_CUSTOMREQUEST, 'DELETE');
+            // prepareRequest pins CURLOPT_CUSTOMREQUEST=DELETE *and* the timeouts,
+            // and the next GET/POST re-pins its own verb — so the DELETE cannot
+            // leak into a later call on the shared Curl handle.
+            $this->prepareRequest('DELETE');
             $this->curl->get(rtrim($this->config->getApiUrl(), '/') . $path);
+            $this->logHttpError('DELETE ' . $path);
 
             return json_decode($this->curl->getBody(), true);
         } catch (\Exception $e) {
