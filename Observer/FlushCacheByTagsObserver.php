@@ -16,13 +16,18 @@ use Magento\Framework\App\Cache\Tag\Resolver;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
 use Qoliber\TridentCache\Model\Config;
+use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Qoliber\TridentCache\Model\PurgeStrategy;
-use Qoliber\TridentCache\Model\TridentClient;
 
+/**
+ * The event fires from AbstractModel::afterSave(), inside the save
+ * transaction. Tags are resolved now, while the entity still knows what
+ * changed; the purge itself waits for the commit (see PurgeAfterCommit).
+ */
 class FlushCacheByTagsObserver implements ObserverInterface
 {
     public function __construct(
-        private readonly TridentClient $tridentClient,
+        private readonly PurgeAfterCommit $purgeAfterCommit,
         private readonly Config $config,
         private readonly Resolver $tagResolver,
         private readonly PurgeStrategy $purgeStrategy
@@ -45,7 +50,7 @@ class FlushCacheByTagsObserver implements ObserverInterface
         if (!empty($tags)) {
             $tags = $this->purgeStrategy->filterTags($object, $tags);
             $normalizedTags = array_unique(array_map('strtolower', $tags));
-            $this->tridentClient->purgeTags($normalizedTags);
+            $this->purgeAfterCommit->purgeTags($normalizedTags);
         }
     }
 }

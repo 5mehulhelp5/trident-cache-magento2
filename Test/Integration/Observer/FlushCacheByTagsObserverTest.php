@@ -11,27 +11,27 @@ use Magento\Framework\Event\Observer;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Qoliber\TridentCache\Model\Config;
+use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Qoliber\TridentCache\Model\PurgeStrategy;
-use Qoliber\TridentCache\Model\TridentClient;
 use Qoliber\TridentCache\Observer\FlushCacheByTagsObserver;
 
 class FlushCacheByTagsObserverTest extends TestCase
 {
     private FlushCacheByTagsObserver $observer;
-    private TridentClient&MockObject $clientMock;
+    private PurgeAfterCommit&MockObject $purgeMock;
     private Config&MockObject $configMock;
     private Resolver&MockObject $tagResolverMock;
     private PurgeStrategy&MockObject $purgeStrategyMock;
 
     protected function setUp(): void
     {
-        $this->clientMock = $this->createMock(TridentClient::class);
+        $this->purgeMock = $this->createMock(PurgeAfterCommit::class);
         $this->configMock = $this->createMock(Config::class);
         $this->tagResolverMock = $this->createMock(Resolver::class);
         $this->purgeStrategyMock = $this->createMock(PurgeStrategy::class);
 
         $this->observer = new FlushCacheByTagsObserver(
-            $this->clientMock,
+            $this->purgeMock,
             $this->configMock,
             $this->tagResolverMock,
             $this->purgeStrategyMock
@@ -48,7 +48,7 @@ class FlushCacheByTagsObserverTest extends TestCase
         $this->tagResolverMock->method('getTags')->with($entity)->willReturn($tags);
         $this->purgeStrategyMock->method('filterTags')->with($entity, $tags)->willReturn($tags);
 
-        $this->clientMock->expects($this->once())
+        $this->purgeMock->expects($this->once())
             ->method('purgeTags')
             ->with($this->callback(function (array $normalizedTags): bool {
                 return $normalizedTags === ['cat_p', 'cat_p_42', 'cat_c_p_42'];
@@ -68,7 +68,7 @@ class FlushCacheByTagsObserverTest extends TestCase
         $this->tagResolverMock->method('getTags')->with($entity)->willReturn($tags);
         $this->purgeStrategyMock->method('filterTags')->willReturnArgument(1);
 
-        $this->clientMock->expects($this->once())
+        $this->purgeMock->expects($this->once())
             ->method('purgeTags')
             ->with(['cat_p_1', 'cat_c_2', 'cms_p_3']);
 
@@ -79,7 +79,7 @@ class FlushCacheByTagsObserverTest extends TestCase
     {
         $this->configMock->method('isTridentEnabled')->willReturn(false);
 
-        $this->clientMock->expects($this->never())->method('purgeTags');
+        $this->purgeMock->expects($this->never())->method('purgeTags');
         $this->tagResolverMock->expects($this->never())->method('getTags');
 
         $this->observer->execute($this->createObserver(new DataObject()));
@@ -89,15 +89,9 @@ class FlushCacheByTagsObserverTest extends TestCase
     {
         $this->configMock->method('isTridentEnabled')->willReturn(true);
 
-        $this->clientMock->expects($this->never())->method('purgeTags');
+        $this->purgeMock->expects($this->never())->method('purgeTags');
 
-        $event = $this->createMock(Event::class);
-        $event->method('getObject')->willReturn(null);
-
-        $observer = $this->createMock(Observer::class);
-        $observer->method('getEvent')->willReturn($event);
-
-        $this->observer->execute($observer);
+        $this->observer->execute(new Observer(['event' => new Event(['object' => null])]));
     }
 
     public function testObserverDoesNothingWhenNoTags(): void
@@ -107,19 +101,18 @@ class FlushCacheByTagsObserverTest extends TestCase
         $entity = new DataObject();
         $this->tagResolverMock->method('getTags')->with($entity)->willReturn([]);
 
-        $this->clientMock->expects($this->never())->method('purgeTags');
+        $this->purgeMock->expects($this->never())->method('purgeTags');
 
         $this->observer->execute($this->createObserver($entity));
     }
 
+    /**
+     * Real objects, not mocks: Event::getObject() is a magic DataObject
+     * accessor, which PHPUnit refuses to configure — every test here used to
+     * error out before reaching the observer.
+     */
     private function createObserver(object $entity): Observer
     {
-        $event = $this->createMock(Event::class);
-        $event->method('getObject')->willReturn($entity);
-
-        $observer = $this->createMock(Observer::class);
-        $observer->method('getEvent')->willReturn($event);
-
-        return $observer;
+        return new Observer(['event' => new Event(['object' => $entity])]);
     }
 }

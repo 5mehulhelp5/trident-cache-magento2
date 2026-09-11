@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 From v1.4.0 the module version tracks the Trident engine version it integrates
 with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
+## [Unreleased]
+
+### Fixed — a saved change could be replaced by the old page for the whole TTL
+- **Purges now leave after the save transaction commits, not before.** Magento
+  dispatches `clean_cache_by_tags` from `AbstractModel::afterSave()`, inside the
+  save transaction. The module sent the purge from there, so it reached Trident
+  while the new data was still invisible to every other database connection.
+  With soft purge the refresh worker re-fetched the page at once, the storefront
+  rendered it from the old state, and Trident stored that old page again as
+  fresh — the only purge had already been spent. The same render refilled
+  Magento's own `block_html` cache with the old content, so the storefront kept
+  it too.
+- How it showed: whenever the refresh reached the storefront before the
+  commit, a price change reached the user only after the next indexer cron run
+  cleaned `block_html` and sent a second purge. With cron down, or with
+  a change no indexer subscribes to, the old page stayed until the TTL. The
+  Magento e2e suite caught it intermittently: `34 instead of 41.77 — entry
+  invalidated, but the previous body was served`.
+- Reproduced deterministically by holding the save transaction 4 s after
+  `afterSave`: before this fix the edge AND the storefront kept the old price
+  until an indexer run; after it the new price is on the edge 2 s after the
+  commit, with no cron. The purge now arrives within 0.5 s after the commit
+  rather than at `afterSave`.
+- `Model/PurgeAfterCommit.php` defers the purge through Magento's commit
+  callbacks (`execute_commit_callbacks` runs them on every commit that brings
+  the level to zero, raw adapter commits included, and drops them on
+  rollback); outside a transaction it still goes out immediately. Purges from
+  one transaction are merged and deduplicated, then sent in requests of at most
+  1000 tags — one merged body over the admin API's 1 MiB `max_body_size` would
+  be refused with 413 and lose every purge of the commit.
+  `FlushCacheByTagsObserver` and `CacheTypePlugin` both use it — a single purge
+  sent before the commit is enough to store the old page again.
+- Supported setup: the single `default` connection (all of Open Source). An
+  entity saved through another connection — a Commerce split database, a
+  module's own connection — is checked against the wrong transaction.
+
+### Fixed — tests
+- `FlushCacheByTagsObserverTest` errored on every test before reaching the
+  observer (`Event::getObject()` is a magic accessor PHPUnit cannot mock); it
+  now builds real `Event`/`Observer` objects.
+
 ## [1.5.2] - 2026-07-23
 
 > **Versioning:** re-syncs the module to the current engine — it pairs with

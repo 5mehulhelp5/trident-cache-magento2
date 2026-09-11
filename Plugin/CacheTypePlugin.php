@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace Qoliber\TridentCache\Plugin;
 
 use Magento\PageCache\Model\Cache\Type as PageCacheType;
+use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Qoliber\TridentCache\Model\TridentClient;
 use Zend_Cache;
 
@@ -23,7 +24,9 @@ use Zend_Cache;
  * (e.g. direct cache invalidation from custom modules, third-party extensions).
  *
  * For entity saves, FlushCacheByTagsObserver also fires (via clean_cache_by_tags event),
- * resulting in a duplicate purge — this is harmless (idempotent, local HTTP call).
+ * resulting in a duplicate purge — this is harmless (idempotent, local HTTP call). Both go
+ * through PurgeAfterCommit: one purge sent before the commit is enough to store the old
+ * page again, so deferring only the observer's copy would fix nothing.
  */
 class CacheTypePlugin
 {
@@ -31,7 +34,8 @@ class CacheTypePlugin
     private const FPC_TAG = 'FPC';
 
     public function __construct(
-        private readonly TridentClient $tridentClient
+        private readonly TridentClient $tridentClient,
+        private readonly PurgeAfterCommit $purgeAfterCommit
     ) {
     }
 
@@ -49,12 +53,12 @@ class CacheTypePlugin
         }
 
         if ($mode === Zend_Cache::CLEANING_MODE_ALL) {
-            $this->tridentClient->purgeAll();
+            $this->purgeAfterCommit->purgeAll();
         } elseif (!empty($tags)) {
             $tags = array_values(array_diff($tags, [self::FPC_TAG]));
 
             if (!empty($tags)) {
-                $this->tridentClient->purgeTags($tags);
+                $this->purgeAfterCommit->purgeTags($tags);
             }
         }
 
