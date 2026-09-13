@@ -68,6 +68,20 @@ class PurgeAfterCommit
     private bool $pendingAll = false;
 
     /**
+     * Config-derived tags, held until the configuration is reloaded.
+     *
+     * @var array<string, true>
+     */
+    private array $pendingConfigTags = [];
+
+    /**
+     * Whether the end-of-request floor for config tags is armed.
+     *
+     * @var bool
+     */
+    private bool $configFloorRegistered = false;
+
+    /**
      * @param ResourceConnection $resourceConnection
      * @param TridentClient $tridentClient
      */
@@ -99,6 +113,58 @@ class PurgeAfterCommit
     }
 
     /**
+     * Hold config-derived tags until the configuration has been reloaded.
+     *
+     * Saving a configuration value does not make the new value visible: the
+     * admin save runs `configStorage->save()` and only afterwards
+     * `ReinitableConfig::reinit()`. A purge sent at save time therefore hands
+     * the refresh a storefront that still answers with the OLD value, and the
+     * edge stores it again — measured on 2.4.x with `/robots.txt`, where the
+     * edge ended up permanently ONE change behind: save A then B, and the edge
+     * serves A.
+     *
+     * These tags are flushed by the reinit plugin instead — deliberately NOT
+     * by the commit callback, which runs before the reload and would spend the
+     * purge on the old value again. A shutdown flush is the floor for a CLI
+     * path that never reinitialises: late beats never.
+     *
+     * @param array<string> $tags
+     * @return void
+     */
+    public function purgeConfigTags(array $tags): void
+    {
+        if ($tags === []) {
+            return;
+        }
+        foreach ($tags as $tag) {
+            $this->pendingConfigTags[(string) $tag] = true;
+        }
+        if (!$this->configFloorRegistered) {
+            // Floor, not the intended path: a CLI save that never reinitialises
+            // would otherwise never purge at all. End of process is late, and
+            // late beats never.
+            // phpcs:ignore Magento2.Functions.DiscouragedFunction
+            register_shutdown_function([$this, 'flushConfigTags']);
+            $this->configFloorRegistered = true;
+        }
+    }
+
+    /**
+     * Send the held config tags — the configuration is now reloaded.
+     *
+     * @return void
+     */
+    public function flushConfigTags(): void
+    {
+        if ($this->pendingConfigTags === []) {
+            return;
+        }
+        $tags = array_map('strval', array_keys($this->pendingConfigTags));
+        $this->pendingConfigTags = [];
+        $this->sendTags($tags);
+    }
+
+    /**
      * Purge everything now, or after the commit when a transaction is open.
      *
      * @return void
@@ -126,6 +192,7 @@ class PurgeAfterCommit
         if ($this->pendingAll) {
             $this->pendingAll = false;
             $this->pendingTags = [];
+            $this->pendingConfigTags = [];
             $this->tridentClient->purgeAll();
             return;
         }

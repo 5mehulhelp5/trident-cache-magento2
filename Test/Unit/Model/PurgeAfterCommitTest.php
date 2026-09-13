@@ -175,6 +175,53 @@ class PurgeAfterCommitTest extends TestCase
         $this->purge->flush();
     }
 
+    /**
+     * A config value is only readable after the configuration reloads, so its
+     * purge must not go out with the commit — it would be spent re-storing the
+     * old value, which is how the edge ended up one change behind on 2.4.x.
+     */
+    public function testConfigTagsAreNotSentByTheCommit(): void
+    {
+        $this->client->expects($this->never())->method('purgeTags');
+
+        $this->level = 1;
+        $this->purge->purgeConfigTags(['robots_1']);
+        $this->commitTo(0);
+    }
+
+    public function testConfigTagsGoOutWhenTheConfigurationReloads(): void
+    {
+        $this->client->expects($this->once())->method('purgeTags')
+            ->with(['robots_1', 'robots_2']);
+
+        $this->level = 1;
+        $this->purge->purgeConfigTags(['robots_1']);
+        $this->purge->purgeConfigTags(['robots_2']);
+        $this->commitTo(0);
+
+        $this->purge->flushConfigTags();
+    }
+
+    public function testASecondReloadSendsNothing(): void
+    {
+        $this->client->expects($this->once())->method('purgeTags');
+
+        $this->purge->purgeConfigTags(['robots_1']);
+        $this->purge->flushConfigTags();
+        $this->purge->flushConfigTags();
+    }
+
+    public function testPurgeAllSupersedesHeldConfigTags(): void
+    {
+        $this->client->expects($this->never())->method('purgeTags');
+        $this->client->expects($this->once())->method('purgeAll');
+
+        $this->level = 1;
+        $this->purge->purgeConfigTags(['robots_1']);
+        $this->purge->purgeAll();
+        $this->commitTo(0);
+    }
+
     private function commitTo(int $level): void
     {
         $this->level = $level;

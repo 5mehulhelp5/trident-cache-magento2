@@ -26,6 +26,11 @@
         <plugin name="trident_cache_type" type="Qoliber\TridentCache\Plugin\CacheTypePlugin" sortOrder="100"/>
     </type>
 
+    <!-- Config purges wait for the reload that makes the new value readable -->
+    <type name="Magento\Framework\App\Config\ReinitableConfigInterface">
+        <plugin name="trident_config_reload" type="Qoliber\TridentCache\Plugin\ConfigReloadPlugin" sortOrder="10"/>
+    </type>
+
     <!-- Map Trident type (3) to Varnish (2) so core FPC plugins activate -->
     <type name="Magento\PageCache\Model\Config">
         <plugin name="trident_config_type" type="Qoliber\TridentCache\Plugin\PageCache\ConfigTypePlugin" sortOrder="1"/>

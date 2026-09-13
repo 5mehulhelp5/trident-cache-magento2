@@ -10,6 +10,31 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
 ## [Unreleased]
 
+### Fixed — a settings change never reached the edge (robots.txt and friends)
+
+- **A configuration value's own cache tags were never purged.** Magento's tag
+  resolver returns exactly one strategy's tags, and a custom strategy wins over
+  the identifier one: `Magento_Store` registers one for
+  `App\Config\ValueInterface` that returns only the GraphQL store-config tags,
+  so the value's own `getIdentities()` never reached the purge. For robots that
+  identity is `robots_<storeId>` — exactly the tag `X-Magento-Tags` puts on
+  `/robots.txt`. Measured on 2.4.x: the purge arrived and **matched nothing**,
+  and the cached robots.txt survived the change for its full 24 h `max-age`.
+  The observer now adds those identities back, for config values only: the
+  other custom strategies (customer, address, subscriber) replace identities on
+  purpose and widening this would purge the shared cache on every customer save.
+- **The purge for a config value was one step too early.** A configuration save
+  writes the values and only then reinitialises the configuration; a purge sent
+  at save time is spent on a storefront that still answers with the old value,
+  and the refresh stores it again. Measured: the edge settled **permanently one
+  change behind** — save A then B, and visitors get A. Config-derived tags are
+  now held until `ReinitableConfig::reinit()`, which is the first moment the new
+  value can be served (`Plugin/ConfigReloadPlugin`). A shutdown flush is the
+  floor for CLI paths that never reinitialise.
+- Proven on the e2e stack against the admin's own `DesignConfigRepository`:
+  before, the edge never updated; with the tag fix it trailed by one change;
+  with both, the newest robots.txt is on the edge within 3 s of the save.
+
 ### Fixed — a saved change could be replaced by the old page for the whole TTL
 - **Purges now leave after the save transaction commits, not before.** Magento
   dispatches `clean_cache_by_tags` from `AbstractModel::afterSave()`, inside the
