@@ -10,6 +10,26 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
 ## [Unreleased]
 
+### Fixed — `cache:flush` left the edge untouched
+
+- **`bin/magento cache:clean` and `cache:flush` sent Trident nothing.** Both go
+  through `Cache\Manager`, and `flush()` wipes the cache **backend** without
+  going through the cache-type objects, so neither the `PageCache\Model\Cache\Type`
+  plugin nor the `adminhtml_cache_flush_*` events fire — no admin controller ran.
+  Measured on 2.4.x: `cache:flush` emptied every Magento cache and left **7 of 7**
+  edge entries in place, so the site kept serving pages built from the templates
+  and configuration a deploy had just replaced. This is the last line of most
+  deploy scripts.
+- `Plugin/CacheManagerPlugin` purges on `flush()` unconditionally — the backend
+  is gone, so nothing the edge holds can still be vouched for — and on `clean()`
+  only when `full_page` is among the types. A routine `cache:clean config` must
+  not cold the edge, and it no longer does: measured 6 entries before and 6
+  after, against 0 after `cache:clean full_page`.
+- **Also covered by this:** a theme or template change. Design backend models
+  carry no cache identities at all, so nothing tag-based can ever invalidate
+  them; the flush that follows a theme switch or a static-content deploy is the
+  only signal there is, and now it reaches the edge.
+
 ### Fixed — a settings change never reached the edge (robots.txt and friends)
 
 - **A configuration value's own cache tags were never purged.** Magento's tag

@@ -26,6 +26,11 @@
         <plugin name="trident_cache_type" type="Qoliber\TridentCache\Plugin\CacheTypePlugin" sortOrder="100"/>
     </type>
 
+    <!-- bin/magento cache:clean/flush never reaches the cache-type objects -->
+    <type name="Magento\Framework\App\Cache\Manager">
+        <plugin name="trident_cache_manager" type="Qoliber\TridentCache\Plugin\CacheManagerPlugin" sortOrder="10"/>
+    </type>
+
     <!-- Config purges wait for the reload that makes the new value readable -->
     <type name="Magento\Framework\App\Config\ReinitableConfigInterface">
         <plugin name="trident_config_reload" type="Qoliber\TridentCache\Plugin\ConfigReloadPlugin" sortOrder="10"/>
