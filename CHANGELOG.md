@@ -8,7 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 From v1.4.0 the module version tracks the Trident engine version it integrates
 with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
-## [Unreleased]
+## [1.7.0] - 2026-09-14
+
+> **Versioning:** pairs with **Trident 1.7.0**. The jump from 1.5.2 re-syncs the
+> module to the engine it integrates with; 1.6.x shipped no module changes.
+>
+> Every fix below was found by measuring what actually reaches the edge, on a
+> dockerised Magento with Trident in front, and each one is proven by a
+> before/after measurement rather than by reading the code.
 
 ### Fixed — `cache:flush` left the edge untouched
 
