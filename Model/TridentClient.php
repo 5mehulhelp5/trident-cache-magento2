@@ -23,6 +23,9 @@ class TridentClient
     /** Connection-establishment timeout (seconds). */
     private const CONNECT_TIMEOUT = 5;
 
+    /** X02: why the last purge was not acknowledged; null after a success. */
+    private ?string $lastFailure = null;
+
     /** Emit the "engine 3 but no token" warning at most once per PHP request. */
     private static bool $tokenMissingLogged = false;
 
@@ -89,12 +92,9 @@ class TridentClient
     }
 
     /**
-     * Purge cache by tags (soft or hard purge based on config)
+     * Purge by tags. Returns Trident's acknowledgement, or null when the purge
+     * was not acknowledged (see {@see acknowledged()}).
      *
-     * @param array<string> $tags
-     * @return array<string, mixed>|null
-     */
-    /**
      * @param array<string> $tags
      * @param array<string> $excludeTags
      * @return array<string, mixed>|null
@@ -105,41 +105,36 @@ class TridentClient
             return null;
         }
 
+        $data = [
+            'tags' => array_values(array_unique($tags)),
+            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
+        ];
+        if (!empty($excludeTags)) {
+            $data['exclude_tags'] = array_values(array_unique($excludeTags));
+        }
+
         try {
             $this->curl->setHeaders([
                 'Authorization' => 'Bearer ' . $this->config->getApiToken(),
                 'Content-Type' => 'application/json',
             ]);
-
-            $data = [
-                'tags' => array_values(array_unique($tags)),
-                'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
-            ];
-
-            if (!empty($excludeTags)) {
-                $data['exclude_tags'] = array_values(array_unique($excludeTags));
-            }
-
-            $payload = json_encode($data);
-
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
             $this->prepareRequest('POST');
-            $this->curl->post($apiUrl . '/admin/purge/tags', $payload);
-
-            $response = $this->curl->getBody();
-            $result = json_decode($response, true);
+            $this->curl->post($apiUrl . '/admin/purge/tags', (string) json_encode($data));
+            $result = $this->acknowledged('purge_tags', self::isPurgeAck(...));
 
             if ($this->config->isDebugEnabled()) {
                 $this->logger->info('Trident cache purge', [
                     'tags' => $tags,
                     'exclude_tags' => $excludeTags,
-                    'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
+                    'mode' => $data['mode'],
                     'result' => $result,
                 ]);
             }
 
             return $result;
         } catch (\Exception $e) {
+            $this->lastFailure = 'purge_tags: ' . $e->getMessage();
             $this->logger->error('Trident cache purge failed', [
                 'tags' => $tags,
                 'error' => $e->getMessage(),
@@ -149,7 +144,19 @@ class TridentClient
     }
 
     /**
-     * Purge all cache entries
+     * X02: whether Trident acknowledged a purge of `$tags`.
+     *
+     * @param array<string> $tags
+     * @return bool
+     */
+    public function deliverTags(array $tags): bool
+    {
+        return $tags !== [] && $this->purgeTags($tags) !== null;
+    }
+
+    /**
+     * Clear the whole edge cache. Returns Trident's acknowledgement, or null
+     * when the clear was not acknowledged.
      *
      * @return array<string, mixed>|null
      */
@@ -164,13 +171,10 @@ class TridentClient
                 'Authorization' => 'Bearer ' . $this->config->getApiToken(),
                 'Content-Type' => 'application/json',
             ]);
-
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
             $this->prepareRequest('POST');
-            $this->curl->post($apiUrl . '/admin/cache/clear', json_encode(['confirm' => true]));
-
-            $response = $this->curl->getBody();
-            $result = json_decode($response, true);
+            $this->curl->post($apiUrl . '/admin/cache/clear', (string) json_encode(['confirm' => true]));
+            $result = $this->acknowledged('cache_clear', self::isClearAck(...));
 
             if ($this->config->isDebugEnabled()) {
                 $this->logger->info('Trident cache cleared', ['result' => $result]);
@@ -178,9 +182,89 @@ class TridentClient
 
             return $result;
         } catch (\Exception $e) {
+            $this->lastFailure = 'cache_clear: ' . $e->getMessage();
             $this->logger->error('Trident cache clear failed', ['error' => $e->getMessage()]);
             return null;
         }
+    }
+
+    /**
+     * X02: why the last purge or clear was not acknowledged, or null.
+     *
+     * @return string|null
+     */
+    public function lastFailure(): ?string
+    {
+        return $this->lastFailure;
+    }
+
+    /**
+     * X02: whether Trident acknowledged a full clear.
+     *
+     * @return bool
+     */
+    public function deliverAll(): bool
+    {
+        return $this->purgeAll() !== null;
+    }
+
+    /**
+     * X02: the decoded body of the last response IF it is an acknowledgement:
+     * HTTP 200 and a body matching the engine's schema for that endpoint.
+     *
+     * Anything else — 401 (token), 429 (admin limiter), 5xx or a full queue,
+     * a proxy's HTML error page, an error object sent with a 200 — is not a
+     * purge that happened, and is logged as the reason it did not.
+     *
+     * @param string $context
+     * @param callable(array<string, mixed>): bool $isAck
+     * @return array<string, mixed>|null
+     */
+    private function acknowledged(string $context, callable $isAck): ?array
+    {
+        $status = (int) $this->curl->getStatus();
+        $decoded = json_decode((string) $this->curl->getBody(), true);
+        if ($status === 200 && is_array($decoded) && $isAck($decoded)) {
+            $this->lastFailure = null;
+            return $decoded;
+        }
+        $error = is_array($decoded) ? ($decoded['error'] ?? null) : 'response is not JSON';
+        $this->lastFailure = sprintf(
+            '%s: HTTP %d%s',
+            $context,
+            $status,
+            is_string($error) ? ' — ' . $error : ''
+        );
+        $this->logger->error('Trident did not acknowledge the request', [
+            'context' => $context,
+            'status' => $status,
+            'error' => $error,
+        ]);
+        return null;
+    }
+
+    /**
+     * `PurgeResponse`: `purged` (count), `mode`, `state`.
+     *
+     * @param array<string, mixed> $body
+     * @return bool
+     */
+    private static function isPurgeAck(array $body): bool
+    {
+        return is_int($body['purged'] ?? null)
+            && is_string($body['mode'] ?? null)
+            && is_string($body['state'] ?? null);
+    }
+
+    /**
+     * `CacheClearResponse`: `cleared` must be true.
+     *
+     * @param array<string, mixed> $body
+     * @return bool
+     */
+    private static function isClearAck(array $body): bool
+    {
+        return ($body['cleared'] ?? null) === true;
     }
 
     /**

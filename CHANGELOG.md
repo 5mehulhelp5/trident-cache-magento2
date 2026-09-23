@@ -8,6 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 From v1.4.0 the module version tracks the Trident engine version it integrates
 with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
+## [Unreleased] — pairs with Trident 1.8.0
+
+### Fixed — a purge Trident refused was lost (X02)
+
+A purge counted as sent the moment the request left, and the pending tags
+were cleared before anyone looked at the answer. Magento's Curl does not throw
+on an HTTP error, so a 401 after a token rotation, a 429 from the admin
+limiter, a 503, a timeout — or the PHP process dying between the commit and
+the send — each lost a committed invalidation, and the edge served the old
+page for its whole TTL.
+
+- **Acknowledged or kept.** A purge is delivered only when Trident answers
+  200 with its purge schema (`purged`/`mode`/`state`; `cleared: true` for a
+  full clear). Anything else is logged with the status and kept.
+- **Recorded in the transaction.** Every purge is first written to
+  `qoliber_trident_purge_outbox` through the same connection as the entity
+  save, so it commits — or rolls back — with the data. A rolled-back save
+  leaves no purge behind (previously it went out with the next commit).
+- **Retried.** The commit sends it at once; a new cron job
+  (`qoliber_trident_purge_outbox_drain`, every minute) retries with backoff
+  up to 5 minutes, and never gives up. A request-thread drain stops after 3
+  consecutive failures, so a storefront save never waits out a down edge.
+  Delivery is idempotent: a crash between send and removal costs one
+  duplicate purge, never a lost one.
+- **A full clear supersedes only what it saw.** It removes the queued tag
+  purges its drain read before sending it — never a row by id range, which
+  could include a change committed after the clear went out.
+- **Visible.** `bin/magento trident:purge:status` prints pending count,
+  oldest age and the last failure, and exits 1 when purges have waited more
+  than 15 minutes (cron stopped, token wrong) — wire it to monitoring.
+  `bin/magento trident:purge:drain` delivers now.
+- `cache:flush` and the admin "Flush Magento Cache" go through the same
+  outbox. The admin panel's purge buttons still call Trident directly and
+  now report a refused purge as failed instead of as done.
+
+**Upgrade:** run `bin/magento setup:upgrade` (creates the table) and make sure
+cron runs. Until the table exists, purges are sent the old best-effort way
+and an error is logged. Supported setup: one `default` database connection and
+one Trident target (multi-target fan-out is 1.9).
+
 ## [1.7.0] - 2026-09-14
 
 > **Versioning:** pairs with **Trident 1.7.0**. The jump from 1.5.2 re-syncs the

@@ -13,6 +13,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Qoliber\TridentCache\Model\TridentClient;
+use Qoliber\TridentCache\Test\Unit\Model\Fake\TransactionalOutbox;
 
 /**
  * Commits and rollbacks go through Magento's own `execute_commit_callbacks`
@@ -25,6 +26,8 @@ class PurgeAfterCommitTest extends TestCase
     private AdapterInterface&MockObject $connection;
     private PurgeAfterCommit $purge;
     private ExecuteCommitCallbacks $commitCallbacks;
+    private TransactionalOutbox $outbox;
+    private ResourceConnection&MockObject $resource;
     private int $level = 0;
 
     protected function setUp(): void
@@ -32,9 +35,10 @@ class PurgeAfterCommitTest extends TestCase
         $this->client = $this->createMock(TridentClient::class);
         $this->connection = $this->createMock(AdapterInterface::class);
         $this->connection->method('getTransactionLevel')->willReturnCallback(fn (): int => $this->level);
-        $resource = $this->createMock(ResourceConnection::class);
-        $resource->method('getConnection')->willReturn($this->connection);
-        $this->purge = new PurgeAfterCommit($resource, $this->client);
+        $this->resource = $this->createMock(ResourceConnection::class);
+        $this->resource->method('getConnection')->willReturn($this->connection);
+        $this->outbox = new TransactionalOutbox(fn (): bool => $this->level > 0);
+        $this->purge = $this->newProcess();
         $this->commitCallbacks = new ExecuteCommitCallbacks(new NullLogger());
         CallbackPool::clear(spl_object_hash($this->connection));
     }
@@ -46,7 +50,7 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testOutsideATransactionThePurgeGoesOutAtOnce(): void
     {
-        $this->client->expects($this->once())->method('purgeTags')->with(['cat_p_1', 'cat_p']);
+        $this->client->expects($this->once())->method('deliverTags')->with(['cat_p_1', 'cat_p']);
 
         $this->purge->purgeTags(['cat_p_1', 'cat_p']);
     }
@@ -58,14 +62,14 @@ class PurgeAfterCommitTest extends TestCase
     public function testInsideATransactionNothingIsSentBeforeTheCommit(): void
     {
         $this->level = 1;
-        $this->client->expects($this->never())->method('purgeTags');
+        $this->client->expects($this->never())->method('deliverTags');
 
         $this->purge->purgeTags(['cat_p_1']);
     }
 
     public function testAnInnerCommitSendsNothing(): void
     {
-        $this->client->expects($this->never())->method('purgeTags');
+        $this->client->expects($this->never())->method('deliverTags');
 
         $this->level = 2;
         $this->purge->purgeTags(['cat_p_1']);
@@ -88,8 +92,8 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testATagThatLooksNumericStaysAString(): void
     {
-        $this->client->expects($this->once())->method('purgeTags')
-            ->with($this->identicalTo(['123', 'cat_p_1']));
+        $this->client->expects($this->once())->method('deliverTags')
+            ->with($this->identicalTo(['123', 'cat_p_1']))->willReturn(true);
 
         $this->level = 1;
         $this->purge->purgeTags(['123', 'cat_p_1']);
@@ -140,7 +144,7 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testARollbackAloneSendsNothing(): void
     {
-        $this->client->expects($this->never())->method('purgeTags');
+        $this->client->expects($this->never())->method('deliverTags');
 
         $this->level = 1;
         $this->purge->purgeTags(['cat_p_1']);
@@ -149,8 +153,8 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testPurgeAllInsideATransactionSupersedesPendingTags(): void
     {
-        $this->client->expects($this->never())->method('purgeTags');
-        $this->client->expects($this->once())->method('purgeAll');
+        $this->client->expects($this->never())->method('deliverTags');
+        $this->client->expects($this->once())->method('deliverAll')->willReturn(true);
 
         $this->level = 1;
         $this->purge->purgeTags(['cat_p_1']);
@@ -160,14 +164,14 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testPurgeAllOutsideATransactionGoesOutAtOnce(): void
     {
-        $this->client->expects($this->once())->method('purgeAll');
+        $this->client->expects($this->once())->method('deliverAll')->willReturn(true);
 
         $this->purge->purgeAll();
     }
 
     public function testASecondFlushSendsNothing(): void
     {
-        $this->client->expects($this->once())->method('purgeTags');
+        $this->client->expects($this->once())->method('deliverTags')->willReturn(true);
 
         $this->level = 1;
         $this->purge->purgeTags(['cat_p_1']);
@@ -182,7 +186,7 @@ class PurgeAfterCommitTest extends TestCase
      */
     public function testConfigTagsAreNotSentByTheCommit(): void
     {
-        $this->client->expects($this->never())->method('purgeTags');
+        $this->client->expects($this->never())->method('deliverTags');
 
         $this->level = 1;
         $this->purge->purgeConfigTags(['robots_1']);
@@ -191,8 +195,8 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testConfigTagsGoOutWhenTheConfigurationReloads(): void
     {
-        $this->client->expects($this->once())->method('purgeTags')
-            ->with(['robots_1', 'robots_2']);
+        $this->client->expects($this->once())->method('deliverTags')
+            ->with(['robots_1', 'robots_2'])->willReturn(true);
 
         $this->level = 1;
         $this->purge->purgeConfigTags(['robots_1']);
@@ -204,7 +208,7 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testASecondReloadSendsNothing(): void
     {
-        $this->client->expects($this->once())->method('purgeTags');
+        $this->client->expects($this->once())->method('deliverTags')->willReturn(true);
 
         $this->purge->purgeConfigTags(['robots_1']);
         $this->purge->flushConfigTags();
@@ -213,8 +217,8 @@ class PurgeAfterCommitTest extends TestCase
 
     public function testPurgeAllSupersedesHeldConfigTags(): void
     {
-        $this->client->expects($this->never())->method('purgeTags');
-        $this->client->expects($this->once())->method('purgeAll');
+        $this->client->expects($this->never())->method('deliverTags');
+        $this->client->expects($this->once())->method('deliverAll')->willReturn(true);
 
         $this->level = 1;
         $this->purge->purgeConfigTags(['robots_1']);
@@ -222,15 +226,175 @@ class PurgeAfterCommitTest extends TestCase
         $this->commitTo(0);
     }
 
+    // ---- X02: durable delivery ------------------------------------------
+
+    /**
+     * The defect: pending state was cleared before delivery was checked, so a
+     * purge Trident refused (401 after a token rotation, 429, 503, timeout)
+     * was simply gone. It must stay and go out with the next drain.
+     */
+    public function testAnUnacknowledgedPurgeIsKeptAndResentByTheNextDrain(): void
+    {
+        $answers = [false, true];
+        $sent = [];
+        $this->client->method('deliverTags')->willReturnCallback(
+            function (array $tags) use (&$answers, &$sent): bool {
+                $sent[] = $tags;
+                return array_shift($answers);
+            }
+        );
+
+        $this->level = 1;
+        $this->purge->purgeTags(['cat_p_1']);
+        $this->commitTo(0);
+        $this->assertCount(1, $this->outbox->rows, 'refused, so still pending');
+        $this->assertNotEmpty($this->outbox->failures, 'and the failure is recorded');
+
+        $this->purge->drain(50);
+
+        $this->assertSame([['cat_p_1'], ['cat_p_1']], $sent);
+        $this->assertSame([], $this->outbox->rows, 'acknowledged, so removed');
+    }
+
+    /**
+     * The transaction commits and the process dies before the commit
+     * callback runs — the purge must survive in the database and be sent by
+     * the next process (cron or the next commit).
+     */
+    public function testAPurgeSurvivesTheProcessDyingAfterTheCommit(): void
+    {
+        $sent = $this->recordTagRequests();
+
+        $this->level = 1;
+        $this->purge->purgeTags(['cat_p_1']);
+        $this->commitAndDie();
+        $this->assertSame([], $sent->requests, 'nothing was sent before the death');
+
+        $this->newProcess()->drain(500);
+
+        $this->assertSame([['cat_p_1']], $sent->requests);
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    /** Sent, then the process died before removing the entry: sent again. */
+    public function testDyingBetweenSendAndRemoveCostsADuplicateNotALoss(): void
+    {
+        $sent = $this->recordTagRequests();
+        $this->outbox->enqueue('tags', ['cat_p_1']);
+        $this->client->method('deliverTags'); // recorded above
+        // Delivered by a process that died before remove(): the row is still there.
+        $this->newProcess()->drain(500);
+        $this->outbox->enqueue('tags', ['cat_p_1']);
+        $this->newProcess()->drain(500);
+
+        $this->assertSame([['cat_p_1'], ['cat_p_1']], $sent->requests, 'idempotent re-delivery');
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    public function testARollBackLeavesNoIntentBehind(): void
+    {
+        $this->client->expects($this->never())->method('deliverTags');
+
+        $this->level = 1;
+        $this->purge->purgeTags(['cat_p_1']);
+        $this->rollBack();
+        $this->newProcess()->drain(500);
+
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    /**
+     * A full clear supersedes only the entries its drain READ before sending
+     * it. A row an open transaction wrote with a LOWER id, committed after
+     * the clear went out, describes a change the clear never saw.
+     */
+    public function testAClearRemovesOnlyTheEntriesItRead(): void
+    {
+        $sent = $this->recordTagRequests();
+        $late = $this->outbox->reserveForOtherTransaction('tags', ['cat_p_late']);
+        $this->outbox->enqueue('tags', ['cat_p_1']);
+        $this->outbox->enqueue('all');
+        $this->client->method('deliverAll')->willReturnCallback(function () use ($late): bool {
+            // The other transaction commits while the clear is on the wire.
+            $this->outbox->commitOther($late);
+            return true;
+        });
+
+        $this->newProcess()->drain(500);
+        $this->assertSame([], $sent->requests, 'cat_p_1 was covered by the clear');
+        $this->assertArrayHasKey($late->id, $this->outbox->rows, 'the late row survives the clear');
+
+        $this->newProcess()->drain(500);
+        $this->assertSame([['cat_p_late']], $sent->requests);
+    }
+
+    public function testADrainStopsAfterThreeConsecutiveFailures(): void
+    {
+        $calls = 0;
+        $this->client->method('deliverTags')->willReturnCallback(function () use (&$calls): bool {
+            $calls++;
+            return false;
+        });
+        for ($i = 0; $i < 5; $i++) {
+            $this->outbox->enqueue('tags', array_map(fn (int $n): string => "t{$i}_$n", range(1, 1000)));
+        }
+
+        $this->newProcess()->drain(500);
+
+        $this->assertSame(3, $calls, 'a down edge is not waited out five times');
+        $this->assertCount(5, $this->outbox->rows, 'nothing is dropped');
+    }
+
+    public function testEntriesAreMergedIntoRequestsOfAtMostAThousandTags(): void
+    {
+        $sent = $this->recordTagRequests();
+        $this->outbox->enqueue('tags', ['a', 'b']);
+        $this->outbox->enqueue('tags', ['b', 'c']);
+        $this->outbox->enqueue('tags', array_map(fn (int $n): string => "x$n", range(1, 999)));
+
+        $this->newProcess()->drain(500);
+
+        $this->assertSame(['a', 'b', 'c'], $sent->requests[0]);
+        $this->assertCount(999, $sent->requests[1]);
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    /** Before `setup:upgrade` creates the table, purges still go out. */
+    public function testWithoutItsTableThePurgeStillGoesOutDirectly(): void
+    {
+        $this->outbox->broken = true;
+        $this->client->expects($this->once())->method('deliverTags')->with(['cat_p_1'])->willReturn(true);
+
+        $this->purge->purgeTags(['cat_p_1']);
+    }
+
+    /** A PurgeAfterCommit in a fresh PHP process: same database, no memory. */
+    private function newProcess(): PurgeAfterCommit
+    {
+        return new PurgeAfterCommit($this->resource, $this->client, $this->outbox, new NullLogger());
+    }
+
     private function commitTo(int $level): void
     {
         $this->level = $level;
+        if ($level === 0) {
+            $this->outbox->commit();
+        }
         $this->commitCallbacks->afterCommit($this->connection, $this->connection);
+    }
+
+    /** The transaction commits, then the process dies before the callbacks. */
+    private function commitAndDie(): void
+    {
+        $this->level = 0;
+        $this->outbox->commit();
+        CallbackPool::clear(spl_object_hash($this->connection));
     }
 
     private function rollBack(): void
     {
         $this->level = 0;
+        $this->outbox->rollBack();
         $this->commitCallbacks->afterRollBack($this->connection, $this->connection);
     }
 
@@ -240,9 +404,9 @@ class PurgeAfterCommitTest extends TestCase
             /** @var array<int, array<string>> */
             public array $requests = [];
         };
-        $this->client->method('purgeTags')->willReturnCallback(function (array $tags) use ($sent) {
+        $this->client->method('deliverTags')->willReturnCallback(function (array $tags) use ($sent) {
             $sent->requests[] = $tags;
-            return [];
+            return true;
         });
         return $sent;
     }

@@ -1,0 +1,20 @@
+{
+    "qoliber_trident_purge_outbox": {
+        "column": {
+            "entity_id": true,
+            "kind": true,
+            "tags": true,
+            "attempts": true,
+            "created_at": true,
+            "next_attempt_at": true,
+            "last_error": true,
+            "last_error_at": true
+        },
+        "index": {
+            "QOLIBER_TRIDENT_PURGE_OUTBOX_NEXT_ATTEMPT_AT": true
+        },
+        "constraint": {
+            "PRIMARY": true
+        }
+    }
+}

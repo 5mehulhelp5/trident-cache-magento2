@@ -14,12 +14,14 @@ namespace Qoliber\TridentCache\Observer;
 
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
+use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Qoliber\TridentCache\Model\TridentClient;
 
 class CacheFlushObserver implements ObserverInterface
 {
     public function __construct(
-        private readonly TridentClient $tridentClient
+        private readonly TridentClient $tridentClient,
+        private readonly PurgeAfterCommit $purgeAfterCommit
     ) {
     }
 
@@ -29,7 +31,8 @@ class CacheFlushObserver implements ObserverInterface
             return;
         }
 
-        // Clear all Trident cache when Magento cache is flushed
-        $this->tridentClient->purgeAll();
+        // Clear all Trident cache when Magento cache is flushed — through the
+        // outbox, so a refused clear is retried instead of lost (X02).
+        $this->purgeAfterCommit->purgeAll();
     }
 }

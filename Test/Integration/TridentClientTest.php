@@ -55,8 +55,11 @@ class TridentClientTest extends TestCase
             ->method('post')
             ->with('http://127.0.0.1:6085/admin/purge/tags', $expectedPayload);
 
+
+        // X02: an acknowledgement is a 200 with the engine's schema.
+        $this->curlMock->method('getStatus')->willReturn(200);
         $this->curlMock->method('getBody')
-            ->willReturn('{"purged": 5}');
+            ->willReturn('{"purged": 5, "mode": "soft", "state": "applied", "barrier": "freshness"}');
 
         $result = $this->client->purgeTags(['cat_p_1', 'cat_p_2']);
 
@@ -82,7 +85,11 @@ class TridentClientTest extends TestCase
             ->method('post')
             ->with('http://127.0.0.1:6085/admin/purge/tags', $expectedPayload);
 
-        $this->curlMock->method('getBody')->willReturn('{"purged": 1}');
+
+        // X02: an acknowledgement is a 200 with the engine's schema.
+        $this->curlMock->method('getStatus')->willReturn(200);
+        $this->curlMock->method('getBody')
+            ->willReturn('{"purged": 1, "mode": "hard", "state": "applied", "barrier": "delivery"}');
 
         $result = $this->client->purgeTags(['cat_p_1'], ['cat_c_1']);
 
@@ -103,7 +110,11 @@ class TridentClientTest extends TestCase
                 json_encode(['confirm' => true])
             );
 
-        $this->curlMock->method('getBody')->willReturn('{"cleared": true}');
+
+        // X02: an acknowledgement is a 200 with the engine's schema.
+        $this->curlMock->method('getStatus')->willReturn(200);
+        $this->curlMock->method('getBody')
+            ->willReturn('{"cleared": true, "entries_removed": 7, "bytes_freed": 1024}');
 
         $result = $this->client->purgeAll();
 

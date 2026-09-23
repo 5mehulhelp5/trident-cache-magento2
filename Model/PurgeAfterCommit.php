@@ -14,6 +14,9 @@ namespace Qoliber\TridentCache\Model;
 
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\Model\CallbackPool;
+use Psr\Log\LoggerInterface;
+use Qoliber\TridentCache\Model\Outbox\OutboxEntry;
+use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 
 /**
  * Sends a purge only once the transaction that caused it has committed.
@@ -38,6 +41,15 @@ use Magento\Framework\Model\CallbackPool;
  * flush — an unneeded purge, which is what the module sent before this class
  * existed — or not at all if no transaction follows; the data did not change.
  *
+ * X02 — durable delivery. Every purge is first RECORDED in the outbox
+ * ({@see PurgeOutboxInterface}) through the same connection, so inside a
+ * transaction the record commits or rolls back with the data. It is removed
+ * only when Trident acknowledges it ({@see TridentClient::deliverTags()}: a
+ * 200 with the engine's purge schema). A 401, 429, 5xx, timeout or dead
+ * process leaves it in the outbox, and the next drain — the next commit, or
+ * the cron job — sends it again. Purges are idempotent, so a duplicate after
+ * a crash between "sent" and "removed" costs one extra purge, never a lost one.
+ *
  * Supported setup: the single `default` connection, which is all Open Source
  * has. Both the transaction check and the callback key use it, so an entity
  * saved through another connection (Commerce split database, a module's own
@@ -47,21 +59,33 @@ class PurgeAfterCommit
 {
     /**
      * Tags per request. Trident's admin API refuses a body over
-     * `max_body_size` (1 MiB by default) with 413, and the client only logs a
-     * failure — so a large transaction merged into one request would lose every
-     * purge for data that did commit. 1000 tags is a few dozen KiB.
+     * `max_body_size` (1 MiB by default) with 413 — so a large transaction
+     * merged into one request would be refused whole. 1000 tags is a few
+     * dozen KiB.
      */
     private const MAX_TAGS_PER_REQUEST = 1000;
 
+    /** Entries a drain looks at from a request thread. */
+    private const REQUEST_DRAIN_LIMIT = 50;
+
     /**
-     * Tags waiting for the commit, as keys for deduplication.
+     * Consecutive failed deliveries after which a drain stops: an edge that
+     * is down is not waited out N times from a storefront request. The
+     * entries stay; the next drain (or cron) retries them.
+     */
+    private const MAX_CONSECUTIVE_FAILURES = 3;
+
+    /**
+     * Fallback only — used when the outbox cannot be written (the module was
+     * upgraded but `setup:upgrade` has not created its table yet). Tags
+     * waiting for the commit, as keys for deduplication.
      *
      * @var array<string, true>
      */
     private array $pendingTags = [];
 
     /**
-     * Whether a full purge is waiting for the commit; it supersedes the tags.
+     * Fallback only: a full purge waiting for the commit.
      *
      * @var bool
      */
@@ -84,15 +108,20 @@ class PurgeAfterCommit
     /**
      * @param ResourceConnection $resourceConnection
      * @param TridentClient $tridentClient
+     * @param PurgeOutboxInterface $outbox
+     * @param LoggerInterface $logger
      */
     public function __construct(
         private readonly ResourceConnection $resourceConnection,
-        private readonly TridentClient $tridentClient
+        private readonly TridentClient $tridentClient,
+        private readonly PurgeOutboxInterface $outbox,
+        private readonly LoggerInterface $logger
     ) {
     }
 
     /**
-     * Purge by tags now, or after the commit when a transaction is open.
+     * Record a purge by tags; send it now, or after the commit when a
+     * transaction is open.
      *
      * @param array<string> $tags
      * @return void
@@ -102,14 +131,22 @@ class PurgeAfterCommit
         if ($tags === []) {
             return;
         }
-        if (!$this->inTransaction()) {
-            $this->sendTags(array_values($tags));
-            return;
+        $tags = array_values(array_map('strval', $tags));
+        try {
+            foreach (array_chunk($tags, self::MAX_TAGS_PER_REQUEST) as $chunk) {
+                $this->outbox->enqueue(OutboxEntry::KIND_TAGS, $chunk);
+            }
+        } catch (\Throwable $e) {
+            $this->outboxUnavailable($e);
+            if (!$this->inTransaction()) {
+                $this->sendDirect($tags);
+                return;
+            }
+            foreach ($tags as $tag) {
+                $this->pendingTags[$tag] = true;
+            }
         }
-        foreach ($tags as $tag) {
-            $this->pendingTags[(string) $tag] = true;
-        }
-        $this->deferFlush();
+        $this->afterRecording();
     }
 
     /**
@@ -150,7 +187,7 @@ class PurgeAfterCommit
     }
 
     /**
-     * Send the held config tags — the configuration is now reloaded.
+     * The configuration is now reloaded: record and send the held tags.
      *
      * @return void
      */
@@ -161,26 +198,39 @@ class PurgeAfterCommit
         }
         $tags = array_map('strval', array_keys($this->pendingConfigTags));
         $this->pendingConfigTags = [];
-        $this->sendTags($tags);
+        try {
+            $this->purgeTags($tags);
+        } catch (\Throwable $e) {
+            // Also runs as a shutdown function: never turn a lost purge into a
+            // fatal error at the end of the request.
+            $this->logger->error('Trident config purge failed', ['error' => $e->getMessage(), 'tags' => $tags]);
+        }
     }
 
     /**
-     * Purge everything now, or after the commit when a transaction is open.
+     * Record a full purge; send it now, or after the commit.
      *
      * @return void
      */
     public function purgeAll(): void
     {
-        if (!$this->inTransaction()) {
-            $this->tridentClient->purgeAll();
-            return;
+        // A full clear covers every config tag still held for the reload.
+        $this->pendingConfigTags = [];
+        try {
+            $this->outbox->enqueue(OutboxEntry::KIND_ALL);
+        } catch (\Throwable $e) {
+            $this->outboxUnavailable($e);
+            if (!$this->inTransaction()) {
+                $this->tridentClient->deliverAll();
+                return;
+            }
+            $this->pendingAll = true;
         }
-        $this->pendingAll = true;
-        $this->deferFlush();
+        $this->afterRecording();
     }
 
     /**
-     * Send everything pending.
+     * Commit callback: send what the commit made durable.
      *
      * Every deferral attaches its own callback, so this runs more than once
      * per commit; all but the first find nothing to send.
@@ -192,29 +242,153 @@ class PurgeAfterCommit
         if ($this->pendingAll) {
             $this->pendingAll = false;
             $this->pendingTags = [];
-            $this->pendingConfigTags = [];
-            $this->tridentClient->purgeAll();
-            return;
+            $this->tridentClient->deliverAll();
+        } elseif ($this->pendingTags !== []) {
+            $tags = array_map('strval', array_keys($this->pendingTags));
+            $this->pendingTags = [];
+            $this->sendDirect($tags);
         }
-        if ($this->pendingTags === []) {
-            return;
-        }
-        $tags = array_map('strval', array_keys($this->pendingTags));
-        $this->pendingTags = [];
-        $this->sendTags($tags);
+        $this->drain(self::REQUEST_DRAIN_LIMIT);
     }
 
     /**
-     * Send tags in requests the admin API accepts.
+     * Deliver due outbox entries; remove each one Trident acknowledges.
+     *
+     * A due full clear goes first and, once acknowledged, removes the tag
+     * entries this drain READ before sending it — and only those. Removing
+     * by id range instead would also take a row an open transaction wrote
+     * earlier but committed after the clear was sent: that change would never
+     * be purged. An entry not read here is simply delivered later (one
+     * redundant purge, never a lost one).
+     *
+     * Remaining tag entries are merged into requests of at most 1000 unique
+     * tags, oldest first; an acknowledged request removes exactly the entries
+     * it carried.
+     *
+     * @param int $limit Entries to read.
+     * @return int Entries removed.
+     */
+    public function drain(int $limit): int
+    {
+        if ($this->inTransaction()) {
+            return 0;
+        }
+        try {
+            $entries = $this->outbox->due($limit);
+        } catch (\Throwable $e) {
+            $this->outboxUnavailable($e);
+            return 0;
+        }
+        if ($entries === []) {
+            return 0;
+        }
+
+        $removed = 0;
+        $failures = 0;
+        $clears = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->kind === OutboxEntry::KIND_ALL));
+        if ($clears !== []) {
+            $last = end($clears);
+            $covered = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->id <= $last->id));
+            $ids = array_map(fn (OutboxEntry $e): int => $e->id, $covered);
+            if ($this->tridentClient->deliverAll()) {
+                $this->outbox->remove($ids);
+                $removed += count($ids);
+            } else {
+                $this->outbox->fail(array_map(fn (OutboxEntry $e): int => $e->id, $clears), $this->failureReason());
+                $failures++;
+            }
+            $entries = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->id > $last->id));
+        }
+
+        foreach ($this->pack($entries) as [$ids, $tags]) {
+            if ($failures >= self::MAX_CONSECUTIVE_FAILURES) {
+                break;
+            }
+            if ($this->tridentClient->deliverTags($tags)) {
+                $this->outbox->remove($ids);
+                $removed += count($ids);
+                $failures = 0;
+            } else {
+                $this->outbox->fail($ids, $this->failureReason());
+                $failures++;
+            }
+        }
+        return $removed;
+    }
+
+    /**
+     * Merge tag entries, in order, into requests of at most 1000 unique tags.
+     *
+     * @param array<int, OutboxEntry> $entries
+     * @return array<int, array{0: array<int>, 1: array<string>}>
+     */
+    private function pack(array $entries): array
+    {
+        $requests = [];
+        $ids = [];
+        $tags = [];
+        foreach ($entries as $entry) {
+            $merged = $tags + array_fill_keys($entry->tags, true);
+            if ($ids !== [] && count($merged) > self::MAX_TAGS_PER_REQUEST) {
+                $requests[] = [$ids, array_map('strval', array_keys($tags))];
+                $ids = [];
+                $merged = array_fill_keys($entry->tags, true);
+            }
+            $ids[] = $entry->id;
+            $tags = $merged;
+        }
+        if ($ids !== []) {
+            $requests[] = [$ids, array_map('strval', array_keys($tags))];
+        }
+        return $requests;
+    }
+
+    /**
+     * Send now when the record is already durable, else after the commit.
+     *
+     * @return void
+     */
+    private function afterRecording(): void
+    {
+        if ($this->inTransaction()) {
+            $this->deferFlush();
+            return;
+        }
+        $this->flush();
+    }
+
+    /**
+     * Fallback send (no outbox): best effort, as before X02.
      *
      * @param array<string> $tags
      * @return void
      */
-    private function sendTags(array $tags): void
+    private function sendDirect(array $tags): void
     {
         foreach (array_chunk($tags, self::MAX_TAGS_PER_REQUEST) as $chunk) {
-            $this->tridentClient->purgeTags($chunk);
+            $this->tridentClient->deliverTags($chunk);
         }
+    }
+
+    /**
+     * @return string
+     */
+    private function failureReason(): string
+    {
+        return $this->tridentClient->lastFailure() ?? 'not acknowledged';
+    }
+
+    /**
+     * @param \Throwable $e
+     * @return void
+     */
+    private function outboxUnavailable(\Throwable $e): void
+    {
+        $this->logger->error(
+            'Trident purge outbox unavailable — purges are sent best-effort and can be lost '
+            . 'until it is (run bin/magento setup:upgrade)',
+            ['error' => $e->getMessage()]
+        );
     }
 
     /**

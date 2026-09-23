@@ -11,6 +11,19 @@
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
 
+    <!-- X02: purges are recorded in the transaction and kept until acknowledged -->
+    <preference for="Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface"
+                type="Qoliber\TridentCache\Model\Outbox\DbPurgeOutbox"/>
+
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="trident_purge_status" xsi:type="object">Qoliber\TridentCache\Console\Command\PurgeStatusCommand</item>
+                <item name="trident_purge_drain" xsi:type="object">Qoliber\TridentCache\Console\Command\PurgeDrainCommand</item>
+            </argument>
+        </arguments>
+    </type>
+
     <!-- Plugin to add Trident option to cache application dropdown -->
     <type name="Magento\PageCache\Model\System\Config\Source\Application">
         <plugin name="trident_cache_application" type="Qoliber\TridentCache\Plugin\ApplicationPlugin" sortOrder="10"/>

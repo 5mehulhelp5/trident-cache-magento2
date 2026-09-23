@@ -1,0 +1,59 @@
+<?php
+
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+namespace Qoliber\TridentCache\Console\Command;
+
+use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
+use Qoliber\TridentCache\Model\PurgeAfterCommit;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+
+/**
+ * `bin/magento trident:purge:drain` — deliver pending purges now (what the
+ * cron job does every minute).
+ */
+class PurgeDrainCommand extends Command
+{
+    /**
+     * @param PurgeAfterCommit $purgeAfterCommit
+     * @param PurgeOutboxInterface $outbox
+     */
+    public function __construct(
+        private readonly PurgeAfterCommit $purgeAfterCommit,
+        private readonly PurgeOutboxInterface $outbox
+    ) {
+        parent::__construct();
+    }
+
+    /**
+     * @return void
+     */
+    protected function configure(): void
+    {
+        $this->setName('trident:purge:drain')
+            ->setDescription('Deliver purges not yet acknowledged by Trident');
+    }
+
+    /**
+     * @param InputInterface $input
+     * @param OutputInterface $output
+     * @return int
+     */
+    protected function execute(InputInterface $input, OutputInterface $output): int
+    {
+        $delivered = $this->purgeAfterCommit->drain(5000);
+        $pending = $this->outbox->stats()['pending'];
+        $output->writeln(sprintf('delivered: %d, still pending: %d', $delivered, $pending));
+        return $pending === 0 ? Command::SUCCESS : Command::FAILURE;
+    }
+}
