@@ -36,9 +36,11 @@ interface PurgeOutboxInterface
      * Committed entries whose next attempt is due, oldest first.
      *
      * @param int $limit
+     * @param bool $ignoreBackoff Also entries still waiting out a backoff —
+     *        for an operator's "deliver now", not for automatic retries.
      * @return array<int, OutboxEntry>
      */
-    public function due(int $limit): array;
+    public function due(int $limit, bool $ignoreBackoff = false): array;
 
     /**
      * Drop acknowledged entries. Unknown ids are ignored: a concurrent drain

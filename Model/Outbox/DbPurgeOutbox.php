@@ -49,14 +49,16 @@ class DbPurgeOutbox implements PurgeOutboxInterface
     /**
      * @inheritDoc
      */
-    public function due(int $limit): array
+    public function due(int $limit, bool $ignoreBackoff = false): array
     {
         $connection = $this->resourceConnection->getConnection();
         $select = $connection->select()
             ->from($this->table(), ['entity_id', 'kind', 'tags', 'attempts'])
-            ->where('next_attempt_at <= ?', new Expression('CURRENT_TIMESTAMP'))
             ->order('entity_id ASC')
             ->limit($limit);
+        if (!$ignoreBackoff) {
+            $select->where('next_attempt_at <= ?', new Expression('CURRENT_TIMESTAMP'));
+        }
         $entries = [];
         foreach ($connection->fetchAll($select) as $row) {
             $tags = json_decode((string) $row['tags'], true);

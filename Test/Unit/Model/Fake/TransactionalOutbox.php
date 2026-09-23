@@ -73,12 +73,19 @@ class TransactionalOutbox implements PurgeOutboxInterface
         $this->uncommitted = [];
     }
 
-    public function due(int $limit): array
+    /** @var array<int, true> ids waiting out a backoff */
+    public array $backingOff = [];
+
+    public function due(int $limit, bool $ignoreBackoff = false): array
     {
         if ($this->broken) {
             throw new \RuntimeException('Base table or view not found');
         }
-        return array_slice(array_values($this->rows), 0, $limit);
+        $rows = array_values(array_filter(
+            $this->rows,
+            fn (OutboxEntry $e): bool => $ignoreBackoff || !isset($this->backingOff[$e->id])
+        ));
+        return array_slice($rows, 0, $limit);
     }
 
     public function remove(array $ids): void
@@ -93,6 +100,7 @@ class TransactionalOutbox implements PurgeOutboxInterface
         foreach ($ids as $id) {
             if (isset($this->rows[$id])) {
                 $this->failures[$id] = $reason;
+                $this->backingOff[$id] = true;
                 $e = $this->rows[$id];
                 $this->rows[$id] = new OutboxEntry($e->id, $e->kind, $e->tags, $e->attempts + 1);
             }

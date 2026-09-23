@@ -250,6 +250,7 @@ class PurgeAfterCommitTest extends TestCase
         $this->assertCount(1, $this->outbox->rows, 'refused, so still pending');
         $this->assertNotEmpty($this->outbox->failures, 'and the failure is recorded');
 
+        $this->outbox->backingOff = []; // the backoff has passed
         $this->purge->drain(50);
 
         $this->assertSame([['cat_p_1'], ['cat_p_1']], $sent);
@@ -356,6 +357,27 @@ class PurgeAfterCommitTest extends TestCase
 
         $this->assertSame(['a', 'b', 'c'], $sent->requests[0]);
         $this->assertCount(999, $sent->requests[1]);
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    /**
+     * A refused entry waits out its backoff for automatic retries — but the
+     * operator's `trident:purge:drain`, run after fixing the token, delivers
+     * it now (found on the live stack: the command delivered nothing).
+     */
+    public function testAForcedDrainIgnoresTheBackoffAnAutomaticOneKeeps(): void
+    {
+        $answers = [false, true];
+        $this->client->method('deliverTags')->willReturnCallback(
+            function () use (&$answers): bool {
+                return array_shift($answers);
+            }
+        );
+        $this->purge->purgeTags(['cat_p_1']);
+        $this->assertCount(1, $this->outbox->rows, 'refused');
+
+        $this->assertSame(0, $this->newProcess()->drain(500), 'backing off: an automatic drain waits');
+        $this->assertSame(1, $this->newProcess()->drain(500, true), 'the operator drain delivers now');
         $this->assertSame([], $this->outbox->rows);
     }
 

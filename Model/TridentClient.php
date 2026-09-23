@@ -244,7 +244,11 @@ class TridentClient
     }
 
     /**
-     * `PurgeResponse`: `purged` (count), `mode`, `state`.
+     * `PurgeResponse`: `purged` (count) and `mode` — the fields every engine
+     * sends. 1.8 adds `state`/`barrier`, but the fleet runs 1.6/1.7, which
+     * answer `{"purged":0,"mode":"soft","queued_refresh":0}`: requiring
+     * `state` would retry every purge against them forever (found on the live
+     * Magento stack, not by the unit tests, which had encoded the 1.8 schema).
      *
      * @param array<string, mixed> $body
      * @return bool
@@ -253,7 +257,7 @@ class TridentClient
     {
         return is_int($body['purged'] ?? null)
             && is_string($body['mode'] ?? null)
-            && is_string($body['state'] ?? null);
+            && (!isset($body['state']) || is_string($body['state']));
     }
 
     /**

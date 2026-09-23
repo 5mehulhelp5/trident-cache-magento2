@@ -266,15 +266,18 @@ class PurgeAfterCommit
      * it carried.
      *
      * @param int $limit Entries to read.
+     * @param bool $ignoreBackoff Deliver entries still in backoff too — an
+     *        operator's "deliver now" after fixing the cause (a token, an
+     *        outage) must not wait out a retry schedule.
      * @return int Entries removed.
      */
-    public function drain(int $limit): int
+    public function drain(int $limit, bool $ignoreBackoff = false): int
     {
         if ($this->inTransaction()) {
             return 0;
         }
         try {
-            $entries = $this->outbox->due($limit);
+            $entries = $this->outbox->due($limit, $ignoreBackoff);
         } catch (\Throwable $e) {
             $this->outboxUnavailable($e);
             return 0;

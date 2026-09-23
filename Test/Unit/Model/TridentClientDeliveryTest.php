@@ -65,6 +65,8 @@ class TridentClientDeliveryTest extends TestCase
             'not json' => [200, '<html>proxy error</html>'],
             'error body with 200' => [200, '{"error":"something"}'],
             'missing purged' => [200, '{"mode":"hard","state":"applied"}'],
+            'missing mode' => [200, '{"purged":1}'],
+            'state not a string' => [200, '{"purged":1,"mode":"hard","state":7}'],
             'purged not a number' => [200, '{"purged":"3","mode":"hard","state":"applied"}'],
             'redirect' => [302, ''],
         ];
@@ -85,6 +87,18 @@ class TridentClientDeliveryTest extends TestCase
 
         $this->assertTrue($this->client->deliverTags(['cat_p_1']));
         $this->assertSame(3, $this->client->purgeTags(['cat_p_1'])['purged']);
+    }
+
+    /**
+     * The released 1.6/1.7 engines answer without `state` — the fleet's
+     * engines. Found on the live Magento stack: requiring the 1.8 schema
+     * retried every purge against a 1.7.0 edge forever.
+     */
+    public function testAnOlderEngineAcknowledgementIsDelivered(): void
+    {
+        $this->answer(200, '{"purged":0,"mode":"soft","queued_refresh":0}');
+
+        $this->assertTrue($this->client->deliverTags(['cat_p_1']));
     }
 
     public function testATransportFailureIsNotDelivered(): void

@@ -51,7 +51,9 @@ class PurgeDrainCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $delivered = $this->purgeAfterCommit->drain(5000);
+        // Now, not on the retry schedule: the operator is here because the
+        // cause was fixed.
+        $delivered = $this->purgeAfterCommit->drain(5000, true);
         $pending = $this->outbox->stats()['pending'];
         $output->writeln(sprintf('delivered: %d, still pending: %d', $delivered, $pending));
         return $pending === 0 ? Command::SUCCESS : Command::FAILURE;
