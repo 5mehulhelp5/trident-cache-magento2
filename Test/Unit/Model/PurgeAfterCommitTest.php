@@ -11,6 +11,7 @@ use Magento\Framework\Model\ExecuteCommitCallbacks;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use Qoliber\TridentCache\Model\Instance;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Qoliber\TridentCache\Model\TridentClient;
 use Qoliber\TridentCache\Test\Unit\Model\Fake\TransactionalOutbox;
@@ -30,9 +31,20 @@ class PurgeAfterCommitTest extends TestCase
     private ResourceConnection&MockObject $resource;
     private int $level = 0;
 
+    /** @var array<int, Instance> X03: what the client reports as configured */
+    private array $instances;
+
+    /** @var array<string, TridentClient&MockObject> X03: per-instance clients; absent = $this->client */
+    private array $bound = [];
+
     protected function setUp(): void
     {
         $this->client = $this->createMock(TridentClient::class);
+        $this->instances = [new Instance('default', 'http://trident:9301', 'token')];
+        $this->client->method('instances')->willReturnCallback(fn (): array => $this->instances);
+        $this->client->method('forInstance')->willReturnCallback(
+            fn (Instance $i): TridentClient => $this->bound[$i->name] ?? $this->client
+        );
         $this->connection = $this->createMock(AdapterInterface::class);
         $this->connection->method('getTransactionLevel')->willReturnCallback(fn (): int => $this->level);
         $this->resource = $this->createMock(ResourceConnection::class);
@@ -388,6 +400,142 @@ class PurgeAfterCommitTest extends TestCase
         $this->client->expects($this->once())->method('deliverTags')->with(['cat_p_1'])->willReturn(true);
 
         $this->purge->purgeTags(['cat_p_1']);
+    }
+
+    // =========================================================================
+    // X03 — several instances
+    // =========================================================================
+
+    /**
+     * Two instances, each with its own client whose answers the test scripts.
+     *
+     * @param array<string, array<int, bool>> $answers per instance, in order; missing = true
+     * @return object{sent: array<string, array<int, array<string>>>}
+     */
+    private function twoInstances(array $answers = []): object
+    {
+        $this->instances = [
+            new Instance('edge-1', 'http://edge-1:9301', 't1'),
+            new Instance('edge-2', 'http://edge-2:9301', 't2'),
+        ];
+        $log = new class {
+            /** @var array<string, array<int, array<string>>> */
+            public array $sent = [];
+
+            /** @var array<string, array<int, bool>> */
+            public array $answers = [];
+        };
+        $log->answers = $answers;
+        foreach (['edge-1', 'edge-2'] as $name) {
+            $client = $this->createMock(TridentClient::class);
+            $client->method('deliverTags')->willReturnCallback(
+                function (array $tags) use ($name, $log): bool {
+                    $log->sent[$name][] = $tags;
+                    return ($log->answers[$name] ?? []) === [] ? true : array_shift($log->answers[$name]);
+                }
+            );
+            $client->method('deliverAll')->willReturnCallback(function () use ($name, $log): bool {
+                $log->sent[$name][] = ['*'];
+                return true;
+            });
+            $client->method('lastFailure')->willReturn($name . ': HTTP 503');
+            $this->bound[$name] = $client;
+        }
+        $this->client->expects($this->never())->method('deliverTags');
+        return $log;
+    }
+
+    public function testAPurgeIsRecordedAndDeliveredOncePerInstance(): void
+    {
+        $log = $this->twoInstances();
+
+        $this->level = 1;
+        $this->purge->purgeTags(['cat_p_1']);
+        $this->assertSame([], $log->sent, 'held until the commit');
+        $this->commitAndDie();
+        $this->assertSame(['edge-1', 'edge-2'], array_map(fn ($e) => $e->instance, $this->outbox->all()));
+        $this->newProcess()->drain(50);
+
+        $this->assertSame(['edge-1' => [['cat_p_1']], 'edge-2' => [['cat_p_1']]], $log->sent);
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    /**
+     * edge-2 is down: edge-1's purge is done and gone, edge-2's stays — and
+     * the next drain sends it to edge-2 alone, not to edge-1 again.
+     */
+    public function testAnInstanceThatIsDownKeepsOnlyItsOwnPurgePending(): void
+    {
+        $log = $this->twoInstances(['edge-2' => [false, true]]);
+
+        $this->purge->purgeTags(['cat_p_1']);
+        $this->assertSame(['edge-2'], array_map(fn ($e) => $e->instance, $this->outbox->all()));
+        $this->assertSame('edge-2: HTTP 503', end($this->outbox->failures));
+
+        $this->outbox->backingOff = [];
+        $this->purge->drain(50);
+
+        $this->assertSame([['cat_p_1']], $log->sent['edge-1'], 'edge-1 was not sent it twice');
+        $this->assertSame([['cat_p_1'], ['cat_p_1']], $log->sent['edge-2']);
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    /** Three failures stop one instance's drain, never the other's. */
+    public function testOneInstancesFailuresDoNotStopAnother(): void
+    {
+        $log = $this->twoInstances(['edge-1' => [false, false, false, false, false]]);
+        foreach (range(1, 5) as $i) {
+            $this->outbox->enqueue('tags', array_map(fn (int $j): string => "t{$i}_$j", range(1, 1000)), 'edge-1');
+            $this->outbox->enqueue('tags', array_map(fn (int $j): string => "t{$i}_$j", range(1, 1000)), 'edge-2');
+        }
+
+        $this->purge->drain(50);
+
+        $this->assertCount(3, $log->sent['edge-1'], 'edge-1 gave up after three');
+        $this->assertCount(5, $log->sent['edge-2'], 'edge-2 delivered everything');
+        $this->assertSame(['edge-1'], array_values(array_unique(array_map(fn ($e) => $e->instance, $this->outbox->all()))));
+    }
+
+    /** A row written before X03 has no instance: every instance is owed it. */
+    public function testAPurgeRecordedBeforeInstancesExistedGoesToEveryInstance(): void
+    {
+        $log = $this->twoInstances();
+        $this->outbox->enqueue('tags', ['cat_p_1']);
+
+        $this->purge->drain(50);
+
+        $this->assertSame(['edge-1' => [['cat_p_1']], 'edge-2' => [['cat_p_1']]], $log->sent);
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    /**
+     * An instance removed from env.php: its purges are neither sent anywhere
+     * nor dropped behind the operator's back, and they do not take the
+     * drain's slots from the instances that exist.
+     */
+    public function testPurgesForARemovedInstanceAreKeptButDoNotBlockTheOthers(): void
+    {
+        $log = $this->twoInstances();
+        foreach (range(1, 60) as $i) {
+            $this->outbox->enqueue('tags', ["old_$i"], 'edge-gone');
+        }
+        $this->outbox->enqueue('tags', ['cat_p_1'], 'edge-1');
+
+        $this->purge->drain(50);
+
+        $this->assertSame(['edge-1' => [['cat_p_1']]], $log->sent);
+        $this->assertCount(60, $this->outbox->rows, 'kept, not sent');
+        $this->assertSame(60, $this->outbox->forgetInstance('edge-gone'));
+        $this->assertSame([], $this->outbox->rows);
+    }
+
+    public function testAFullClearIsOwedToEveryInstance(): void
+    {
+        $log = $this->twoInstances();
+
+        $this->purge->purgeAll();
+
+        $this->assertSame(['edge-1' => [['*']], 'edge-2' => [['*']]], $log->sent);
     }
 
     /** A PurgeAfterCommit in a fresh PHP process: same database, no memory. */

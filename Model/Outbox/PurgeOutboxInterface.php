@@ -28,9 +28,11 @@ interface PurgeOutboxInterface
      *
      * @param string $kind OutboxEntry::KIND_TAGS or OutboxEntry::KIND_ALL
      * @param array<string> $tags
+     * @param string|null $instance X03: the instance that owes it. One row
+     *        per instance, so each is acknowledged — and retried — on its own.
      * @return void
      */
-    public function enqueue(string $kind, array $tags = []): void;
+    public function enqueue(string $kind, array $tags = [], ?string $instance = null): void;
 
     /**
      * Committed entries whose next attempt is due, oldest first.
@@ -38,9 +40,19 @@ interface PurgeOutboxInterface
      * @param int $limit
      * @param bool $ignoreBackoff Also entries still waiting out a backoff —
      *        for an operator's "deliver now", not for automatic retries.
+     * @param array<int, string> $instances X03: only entries owed to these
+     *        instances, plus those written before X03. Empty: all entries.
      * @return array<int, OutboxEntry>
      */
-    public function due(int $limit, bool $ignoreBackoff = false): array;
+    public function due(int $limit, bool $ignoreBackoff = false, array $instances = []): array;
+
+    /**
+     * X03: drop everything owed to an instance that is gone for good.
+     *
+     * @param string $instance
+     * @return int Entries removed.
+     */
+    public function forgetInstance(string $instance): int;
 
     /**
      * Drop acknowledged entries. Unknown ids are ignored: a concurrent drain
@@ -61,9 +73,10 @@ interface PurgeOutboxInterface
     public function fail(array $ids, string $reason): void;
 
     /**
-     * Pending count, oldest age in seconds, latest failure.
+     * Pending count, oldest age in seconds, latest failure, and (X03) the
+     * pending count per instance ('' for rows written before X03).
      *
-     * @return array{pending: int, oldest_age: int|null, last_error: string|null, last_error_at: string|null}
+     * @return array{pending: int, oldest_age: int|null, last_error: string|null, last_error_at: string|null, by_instance: array<string, int>}
      */
     public function stats(): array;
 }

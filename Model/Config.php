@@ -30,6 +30,13 @@ class Config
     public const XML_TRIDENT_TTL_STATIC = 'system/full_page_cache/trident/ttl_static';
     public const XML_TRIDENT_ESI_ENABLED = 'system/full_page_cache/trident/esi_enabled';
     public const XML_TRIDENT_ESI_MAX_DEPTH = 'system/full_page_cache/trident/esi_max_depth';
+    public const XML_TRIDENT_INSTANCES = 'system/full_page_cache/trident/instances';
+
+    /** The name of the single instance configured in the admin. */
+    public const DEFAULT_INSTANCE = 'default';
+
+    /** Instance names are stored with each pending purge. */
+    public const MAX_INSTANCE_NAME = 64;
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig,
@@ -52,6 +59,96 @@ class Config
         $value = (string) $this->scopeConfig->getValue(self::XML_TRIDENT_API_TOKEN);
 
         return $value !== '' ? $this->encryptor->decrypt($value) : '';
+    }
+
+    /**
+     * X03: every Trident edge this store invalidates.
+     *
+     * Configured in app/etc/env.php, which Magento layers over the values
+     * saved in the admin — so env.php takes precedence, and anything an
+     * instance leaves out (today: its token) is taken from the admin setting:
+     *
+     *     'system' => ['default' => ['system' => ['full_page_cache' => ['trident' => [
+     *         'instances' => [
+     *             'edge-1' => ['api_url' => 'http://10.0.0.11:9301'],
+     *             'edge-2' => ['api_url' => 'http://10.0.0.12:9301', 'api_token' => '...'],
+     *         ],
+     *     ]]]]],
+     *
+     * After changing the list, run `bin/magento app:config:import` — as after
+     * any change to the `system` section of env.php. Until then Magento
+     * answers every storefront request with a 500 ("The configuration file
+     * has changed").
+     *
+     * Without `instances`, the admin's single API URL and token are the one
+     * instance, exactly as before. Entries without an `api_url` are skipped
+     * and reported by {@see getInstanceErrors()} (and `trident:purge:status`);
+     * if none is usable, the admin setting is used rather than nothing.
+     *
+     * @return array<int, Instance> Never empty; the first is the dashboard's.
+     */
+    public function getInstances(): array
+    {
+        return $this->readInstances()[0];
+    }
+
+    /**
+     * X03: why configured instances were skipped.
+     *
+     * @return array<int, string>
+     */
+    public function getInstanceErrors(): array
+    {
+        return $this->readInstances()[1];
+    }
+
+    /**
+     * @return array{0: array<int, Instance>, 1: array<int, string>}
+     */
+    private function readInstances(): array
+    {
+        $configured = $this->scopeConfig->getValue(self::XML_TRIDENT_INSTANCES);
+        $fallback = [new Instance(self::DEFAULT_INSTANCE, $this->getApiUrl(), $this->getApiToken())];
+        if (!is_array($configured) || $configured === []) {
+            return [$fallback, []];
+        }
+
+        $instances = [];
+        $errors = [];
+        $position = 0;
+        foreach ($configured as $key => $entry) {
+            $position++;
+            $name = is_string($key) && $key !== '' ? $key : 'instance-' . $position;
+            if (!is_array($entry)) {
+                $errors[] = sprintf('%s: expected an array with api_url', $name);
+                continue;
+            }
+            $url = trim((string) ($entry['api_url'] ?? ''));
+            if ($url === '') {
+                $errors[] = sprintf('%s: no api_url', $name);
+                continue;
+            }
+            if (strlen($name) > self::MAX_INSTANCE_NAME) {
+                $errors[] = sprintf('%s: name longer than %d characters', $name, self::MAX_INSTANCE_NAME);
+                continue;
+            }
+            $token = isset($entry['api_token']) && (string) $entry['api_token'] !== ''
+                ? $this->instanceToken((string) $entry['api_token'])
+                : $this->getApiToken();
+            $instances[] = new Instance($name, $url, $token);
+        }
+
+        return [$instances !== [] ? $instances : $fallback, $errors];
+    }
+
+    /**
+     * A token written by hand into env.php is plain text; one written by
+     * `bin/magento config:set --lock-env` is encrypted like the admin field
+     * (`<key version>:<cipher version>:<payload>`).
+     */
+    private function instanceToken(string $value): string
+    {
+        return preg_match('/^\d+:\d+:\S+$/', $value) === 1 ? $this->encryptor->decrypt($value) : $value;
     }
 
     public function isSoftPurgeEnabled(): bool

@@ -16,6 +16,7 @@ use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
@@ -41,7 +42,13 @@ class PurgeDrainCommand extends Command
     protected function configure(): void
     {
         $this->setName('trident:purge:drain')
-            ->setDescription('Deliver purges not yet acknowledged by Trident');
+            ->setDescription('Deliver purges not yet acknowledged by Trident')
+            ->addOption(
+                'forget',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'X03: first drop the purges owed to this instance — only for one removed for good'
+            );
     }
 
     /**
@@ -51,6 +58,14 @@ class PurgeDrainCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        $forget = (string) $input->getOption('forget');
+        if ($forget !== '') {
+            $output->writeln(sprintf(
+                'forgot %d purge(s) owed to "%s"',
+                $this->outbox->forgetInstance($forget),
+                $forget
+            ));
+        }
         // Now, not on the retry schedule: the operator is here because the
         // cause was fixed.
         $delivered = $this->purgeAfterCommit->drain(5000, true);

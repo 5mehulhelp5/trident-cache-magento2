@@ -10,6 +10,43 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
 ## [Unreleased] — pairs with Trident 1.8.0
 
+### Added — several Trident instances (X03)
+
+Stores running more than one Trident server can now purge all of them.
+
+- **Configured in `app/etc/env.php`**, which Magento layers over the admin
+  setting, so it takes precedence; an instance without its own `api_token`
+  uses the admin's token. Without `instances`, the admin's API URL and token
+  are the one instance, exactly as before.
+
+  ```php
+  'system' => ['default' => ['system' => ['full_page_cache' => ['trident' => [
+      'instances' => [
+          'edge-1' => ['api_url' => 'http://10.0.0.11:9301'],
+          'edge-2' => ['api_url' => 'http://10.0.0.12:9301', 'api_token' => '...'],
+      ],
+  ]]]]],
+  ```
+
+  After changing it, run `bin/magento app:config:import` — as for any change
+  to the `system` section of env.php; until then Magento answers every
+  storefront request with a 500 ("The configuration file has changed").
+- **Every invalidation goes to every instance**: entity saves, cache flushes,
+  and the admin's purge by tag, URL, host, vary, pattern and bans. It counts
+  as done only when every instance acknowledged it; a failure names the
+  instance.
+- **Delivered per instance (X02).** A purge is recorded once per instance and
+  each record is acknowledged, backed off and retried on its own — an edge
+  that is down keeps its own purges pending without holding back the others.
+  Rows recorded before this version are owed to every instance and split on
+  the next drain. Purges owed to an instance removed from the list are kept,
+  not sent, and reported: `trident:purge:status` exits 1 and says so;
+  `trident:purge:drain --forget=<name>` drops them once it is gone for good.
+- **Dashboard reads** (stats, entries, warmer, launch, reflect …) use the
+  first instance. Store configuration shows a read-only "Purges go to" list,
+  with any env.php entry that was skipped and why.
+- Schema: `qoliber_trident_purge_outbox.instance` (run `setup:upgrade`).
+
 ### Fixed — a purge Trident refused was lost (X02)
 
 A purge counted as sent the moment the request left, and the pending tags
