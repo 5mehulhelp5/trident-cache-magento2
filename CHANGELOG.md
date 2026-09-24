@@ -8,6 +8,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 From v1.4.0 the module version tracks the Trident engine version it integrates
 with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
+## [Unreleased] — pairs with Trident 1.8.0
+
+### Fixed — a purge Trident refused was lost (X02)
+
+A purge counted as sent the moment the request left, and the pending tags
+were cleared before anyone looked at the answer. Magento's Curl does not throw
+on an HTTP error, so a 401 after a token rotation, a 429 from the admin
+limiter, a 503, a timeout — or the PHP process dying between the commit and
+the send — each lost a committed invalidation, and the edge served the old
+page for its whole TTL.
+
+- **Acknowledged or kept.** A purge is delivered only when Trident answers
+  200 with its purge schema (`purged`/`mode`/`state`; `cleared: true` for a
+  full clear). Anything else is logged with the status and kept.
+- **Recorded in the transaction.** Every purge is first written to
+  `qoliber_trident_purge_outbox` through the same connection as the entity
+  save, so it commits — or rolls back — with the data. A rolled-back save
+  leaves no purge behind (previously it went out with the next commit).
+- **Retried.** The commit sends it at once; a new cron job
+  (`qoliber_trident_purge_outbox_drain`, every minute) retries with backoff
+  up to 5 minutes, and never gives up. A request-thread drain stops after 3
+  consecutive failures, so a storefront save never waits out a down edge.
+  Delivery is idempotent: a crash between send and removal costs one
+  duplicate purge, never a lost one.
+- **A full clear supersedes only what it saw.** It removes the queued tag
+  purges its drain read before sending it — never a row by id range, which
+  could include a change committed after the clear went out.
+- **Visible.** `bin/magento trident:purge:status` prints pending count,
+  oldest age and the last failure, and exits 1 when purges have waited more
+  than 15 minutes (cron stopped, token wrong) — wire it to monitoring.
+  `bin/magento trident:purge:drain` delivers now.
+- `cache:flush` and the admin "Flush Magento Cache" go through the same
+  outbox. The admin panel's purge buttons still call Trident directly and
+  now report a refused purge as failed instead of as done.
+
+**Upgrade:** run `bin/magento setup:upgrade` (creates the table) and make sure
+cron runs. Until the table exists, purges are sent the old best-effort way
+and an error is logged. Supported setup: one `default` database connection and
+one Trident target (multi-target fan-out is 1.9).
+
+## [1.7.0] - 2026-09-14
+
+> **Versioning:** pairs with **Trident 1.7.0**. The jump from 1.5.2 re-syncs the
+> module to the engine it integrates with; 1.6.x shipped no module changes.
+>
+> Every fix below was found by measuring what actually reaches the edge, on a
+> dockerised Magento with Trident in front, and each one is proven by a
+> before/after measurement rather than by reading the code.
+
+### Fixed — `cache:flush` left the edge untouched
+
+- **`bin/magento cache:clean` and `cache:flush` sent Trident nothing.** Both go
+  through `Cache\Manager`, and `flush()` wipes the cache **backend** without
+  going through the cache-type objects, so neither the `PageCache\Model\Cache\Type`
+  plugin nor the `adminhtml_cache_flush_*` events fire — no admin controller ran.
+  Measured on 2.4.x: `cache:flush` emptied every Magento cache and left **7 of 7**
+  edge entries in place, so the site kept serving pages built from the templates
+  and configuration a deploy had just replaced. This is the last line of most
+  deploy scripts.
+- `Plugin/CacheManagerPlugin` purges on `flush()` unconditionally — the backend
+  is gone, so nothing the edge holds can still be vouched for — and on `clean()`
+  only when `full_page` is among the types. A routine `cache:clean config` must
+  not cold the edge, and it no longer does: measured 6 entries before and 6
+  after, against 0 after `cache:clean full_page`.
+- **Also covered by this:** a theme or template change. Design backend models
+  carry no cache identities at all, so nothing tag-based can ever invalidate
+  them; the flush that follows a theme switch or a static-content deploy is the
+  only signal there is, and now it reaches the edge.
+
+### Fixed — a settings change never reached the edge (robots.txt and friends)
+
+- **A configuration value's own cache tags were never purged.** Magento's tag
+  resolver returns exactly one strategy's tags, and a custom strategy wins over
+  the identifier one: `Magento_Store` registers one for
+  `App\Config\ValueInterface` that returns only the GraphQL store-config tags,
+  so the value's own `getIdentities()` never reached the purge. For robots that
+  identity is `robots_<storeId>` — exactly the tag `X-Magento-Tags` puts on
+  `/robots.txt`. Measured on 2.4.x: the purge arrived and **matched nothing**,
+  and the cached robots.txt survived the change for its full 24 h `max-age`.
+  The observer now adds those identities back, for config values only: the
+  other custom strategies (customer, address, subscriber) replace identities on
+  purpose and widening this would purge the shared cache on every customer save.
+- **The purge for a config value was one step too early.** A configuration save
+  writes the values and only then reinitialises the configuration; a purge sent
+  at save time is spent on a storefront that still answers with the old value,
+  and the refresh stores it again. Measured: the edge settled **permanently one
+  change behind** — save A then B, and visitors get A. Config-derived tags are
+  now held until `ReinitableConfig::reinit()`, which is the first moment the new
+  value can be served (`Plugin/ConfigReloadPlugin`). A shutdown flush is the
+  floor for CLI paths that never reinitialise.
+- Proven on the e2e stack against the admin's own `DesignConfigRepository`:
+  before, the edge never updated; with the tag fix it trailed by one change;
+  with both, the newest robots.txt is on the edge within 3 s of the save.
+
+### Fixed — a saved change could be replaced by the old page for the whole TTL
+- **Purges now leave after the save transaction commits, not before.** Magento
+  dispatches `clean_cache_by_tags` from `AbstractModel::afterSave()`, inside the
+  save transaction. The module sent the purge from there, so it reached Trident
+  while the new data was still invisible to every other database connection.
+  With soft purge the refresh worker re-fetched the page at once, the storefront
+  rendered it from the old state, and Trident stored that old page again as
+  fresh — the only purge had already been spent. The same render refilled
+  Magento's own `block_html` cache with the old content, so the storefront kept
+  it too.
+- How it showed: whenever the refresh reached the storefront before the
+  commit, a price change reached the user only after the next indexer cron run
+  cleaned `block_html` and sent a second purge. With cron down, or with
+  a change no indexer subscribes to, the old page stayed until the TTL. The
+  Magento e2e suite caught it intermittently: `34 instead of 41.77 — entry
+  invalidated, but the previous body was served`.
+- Reproduced deterministically by holding the save transaction 4 s after
+  `afterSave`: before this fix the edge AND the storefront kept the old price
+  until an indexer run; after it the new price is on the edge 2 s after the
+  commit, with no cron. The purge now arrives within 0.5 s after the commit
+  rather than at `afterSave`.
+- `Model/PurgeAfterCommit.php` defers the purge through Magento's commit
+  callbacks (`execute_commit_callbacks` runs them on every commit that brings
+  the level to zero, raw adapter commits included, and drops them on
+  rollback); outside a transaction it still goes out immediately. Purges from
+  one transaction are merged and deduplicated, then sent in requests of at most
+  1000 tags — one merged body over the admin API's 1 MiB `max_body_size` would
+  be refused with 413 and lose every purge of the commit.
+  `FlushCacheByTagsObserver` and `CacheTypePlugin` both use it — a single purge
+  sent before the commit is enough to store the old page again.
+- Supported setup: the single `default` connection (all of Open Source). An
+  entity saved through another connection — a Commerce split database, a
+  module's own connection — is checked against the wrong transaction.
+
+### Fixed — tests
+- `FlushCacheByTagsObserverTest` errored on every test before reaching the
+  observer (`Event::getObject()` is a magic accessor PHPUnit cannot mock); it
+  now builds real `Event`/`Observer` objects.
+
 ## [1.5.2] - 2026-07-23
 
 > **Versioning:** re-syncs the module to the current engine — it pairs with
