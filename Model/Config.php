@@ -38,6 +38,9 @@ class Config
     /** Instance names are stored with each pending purge. */
     public const MAX_INSTANCE_NAME = 64;
 
+    /** @var array{0: array<int, Instance>, 1: array<int, string>}|null */
+    private ?array $instances = null;
+
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig,
         private readonly EncryptorInterface $encryptor
@@ -66,7 +69,9 @@ class Config
      *
      * Configured in app/etc/env.php, which Magento layers over the values
      * saved in the admin — so env.php takes precedence, and anything an
-     * instance leaves out (today: its token) is taken from the admin setting:
+     * instance leaves out (today: its token) is taken from the admin setting.
+     * An `api_token` given here is plain text — env.php is already the file
+     * that holds the store's secrets:
      *
      *     'system' => ['default' => ['system' => ['full_page_cache' => ['trident' => [
      *         'instances' => [
@@ -107,11 +112,22 @@ class Config
      */
     private function readInstances(): array
     {
+        // Read once per process: the client asks several times per request.
+        // A change needs app:config:import anyway, and cron runs a new process.
+        return $this->instances ??= $this->parseInstances();
+    }
+
+    /**
+     * @return array{0: array<int, Instance>, 1: array<int, string>}
+     */
+    private function parseInstances(): array
+    {
         $configured = $this->scopeConfig->getValue(self::XML_TRIDENT_INSTANCES);
-        $fallback = [new Instance(self::DEFAULT_INSTANCE, $this->getApiUrl(), $this->getApiToken())];
+        $fallback = fn (): array => [new Instance(self::DEFAULT_INSTANCE, $this->getApiUrl(), $this->getApiToken())];
         if (!is_array($configured) || $configured === []) {
-            return [$fallback, []];
+            return [$fallback(), []];
         }
+        $adminToken = null;
 
         $instances = [];
         $errors = [];
@@ -133,22 +149,12 @@ class Config
                 continue;
             }
             $token = isset($entry['api_token']) && (string) $entry['api_token'] !== ''
-                ? $this->instanceToken((string) $entry['api_token'])
-                : $this->getApiToken();
+                ? (string) $entry['api_token']
+                : ($adminToken ??= $this->getApiToken());
             $instances[] = new Instance($name, $url, $token);
         }
 
-        return [$instances !== [] ? $instances : $fallback, $errors];
-    }
-
-    /**
-     * A token written by hand into env.php is plain text; one written by
-     * `bin/magento config:set --lock-env` is encrypted like the admin field
-     * (`<key version>:<cipher version>:<payload>`).
-     */
-    private function instanceToken(string $value): string
-    {
-        return preg_match('/^\d+:\d+:\S+$/', $value) === 1 ? $this->encryptor->decrypt($value) : $value;
+        return [$instances !== [] ? $instances : $fallback(), $errors];
     }
 
     public function isSoftPurgeEnabled(): bool

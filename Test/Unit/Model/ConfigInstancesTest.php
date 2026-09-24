@@ -67,13 +67,15 @@ class ConfigInstancesTest extends TestCase
         $config = $this->config([
             'edge-1' => ['api_url' => 'http://10.0.0.11:9301'],
             'edge-2' => ['api_url' => 'http://10.0.0.12:9301', 'api_token' => 'plain-edge-2'],
-            'edge-3' => ['api_url' => 'http://10.0.0.13:9301', 'api_token' => '0:3:locked'],
+            'edge-3' => ['api_url' => 'http://10.0.0.13:9301', 'api_token' => '0:3:looks-encrypted'],
         ]);
 
         $this->assertSame([
             ['edge-1', 'http://10.0.0.11:9301', 'decrypted(0:3:admin-encrypted)'],
             ['edge-2', 'http://10.0.0.12:9301', 'plain-edge-2'],
-            ['edge-3', 'http://10.0.0.13:9301', 'decrypted(0:3:locked)'],
+            // Plain text, even when it looks like Magento's cipher format:
+            // guessing would turn a real token into garbage and 401s forever.
+            ['edge-3', 'http://10.0.0.13:9301', '0:3:looks-encrypted'],
         ], self::flat($config->getInstances()));
     }
 

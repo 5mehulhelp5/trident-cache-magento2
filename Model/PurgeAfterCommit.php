@@ -15,7 +15,6 @@ namespace Qoliber\TridentCache\Model;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\Model\CallbackPool;
 use Psr\Log\LoggerInterface;
-use Qoliber\TridentCache\Model\Instance;
 use Qoliber\TridentCache\Model\Outbox\OutboxEntry;
 use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 
@@ -302,20 +301,34 @@ class PurgeAfterCommit
         }
 
         // X03: a row written before instances existed is owed to every one.
-        // Split it once; a crash in between costs a duplicate purge, not one.
+        // Only this batch's are split — the work stays bounded by $limit even
+        // when X02 left thousands behind — and they keep their age, attempts
+        // and backoff. The copies go out with the next drain.
         $legacy = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->instance === null));
         if ($legacy !== []) {
-            foreach ($legacy as $entry) {
-                foreach (array_keys($instances) as $name) {
-                    $this->outbox->enqueue($entry->kind, $entry->tags, (string) $name);
-                }
+            try {
+                $this->outbox->splitAmong(
+                    array_map(fn (OutboxEntry $e): int => $e->id, $legacy),
+                    array_map('strval', array_keys($instances))
+                );
+            } catch (\Throwable $e) {
+                $this->outboxUnavailable($e);
+                return 0;
             }
-            $this->outbox->remove(array_map(fn (OutboxEntry $e): int => $e->id, $legacy));
-            return $this->drain($limit, $ignoreBackoff);
+            $entries = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->instance !== null));
         }
 
         $byInstance = [];
         foreach ($entries as $entry) {
+            if (!isset($instances[(string) $entry->instance])) {
+                // due() matched it, so only a name differing in a way SQL
+                // ignores gets here. Never hand it to the wrong instance.
+                $this->logger->warning('Trident purge owed to an unknown instance skipped', [
+                    'instance' => $entry->instance,
+                    'id' => $entry->id,
+                ]);
+                continue;
+            }
             $byInstance[(string) $entry->instance][] = $entry;
         }
         $removed = 0;

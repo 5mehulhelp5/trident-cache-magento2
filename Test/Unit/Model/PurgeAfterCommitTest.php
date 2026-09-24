@@ -293,11 +293,11 @@ class PurgeAfterCommitTest extends TestCase
     public function testDyingBetweenSendAndRemoveCostsADuplicateNotALoss(): void
     {
         $sent = $this->recordTagRequests();
-        $this->outbox->enqueue('tags', ['cat_p_1']);
+        $this->outbox->enqueue('tags', ['cat_p_1'], 'default');
         $this->client->method('deliverTags'); // recorded above
         // Delivered by a process that died before remove(): the row is still there.
         $this->newProcess()->drain(500);
-        $this->outbox->enqueue('tags', ['cat_p_1']);
+        $this->outbox->enqueue('tags', ['cat_p_1'], 'default');
         $this->newProcess()->drain(500);
 
         $this->assertSame([['cat_p_1'], ['cat_p_1']], $sent->requests, 'idempotent re-delivery');
@@ -325,8 +325,8 @@ class PurgeAfterCommitTest extends TestCase
     {
         $sent = $this->recordTagRequests();
         $late = $this->outbox->reserveForOtherTransaction('tags', ['cat_p_late']);
-        $this->outbox->enqueue('tags', ['cat_p_1']);
-        $this->outbox->enqueue('all');
+        $this->outbox->enqueue('tags', ['cat_p_1'], 'default');
+        $this->outbox->enqueue('all', [], 'default');
         $this->client->method('deliverAll')->willReturnCallback(function () use ($late): bool {
             // The other transaction commits while the clear is on the wire.
             $this->outbox->commitOther($late);
@@ -349,7 +349,7 @@ class PurgeAfterCommitTest extends TestCase
             return false;
         });
         for ($i = 0; $i < 5; $i++) {
-            $this->outbox->enqueue('tags', array_map(fn (int $n): string => "t{$i}_$n", range(1, 1000)));
+            $this->outbox->enqueue('tags', array_map(fn (int $n): string => "t{$i}_$n", range(1, 1000)), 'default');
         }
 
         $this->newProcess()->drain(500);
@@ -361,9 +361,9 @@ class PurgeAfterCommitTest extends TestCase
     public function testEntriesAreMergedIntoRequestsOfAtMostAThousandTags(): void
     {
         $sent = $this->recordTagRequests();
-        $this->outbox->enqueue('tags', ['a', 'b']);
-        $this->outbox->enqueue('tags', ['b', 'c']);
-        $this->outbox->enqueue('tags', array_map(fn (int $n): string => "x$n", range(1, 999)));
+        $this->outbox->enqueue('tags', ['a', 'b'], 'default');
+        $this->outbox->enqueue('tags', ['b', 'c'], 'default');
+        $this->outbox->enqueue('tags', array_map(fn (int $n): string => "x$n", range(1, 999)), 'default');
 
         $this->newProcess()->drain(500);
 
@@ -503,9 +503,61 @@ class PurgeAfterCommitTest extends TestCase
         $this->outbox->enqueue('tags', ['cat_p_1']);
 
         $this->purge->drain(50);
+        $this->assertSame(['edge-1', 'edge-2'], array_map(fn ($e) => $e->instance, $this->outbox->all()), 'split');
+        $this->purge->drain(50);
 
         $this->assertSame(['edge-1' => [['cat_p_1']], 'edge-2' => [['cat_p_1']]], $log->sent);
         $this->assertSame([], $this->outbox->rows);
+    }
+
+    /**
+     * X02 may leave thousands of rows behind; the first request after the
+     * upgrade must split only its own batch, not all of them.
+     */
+    public function testSplittingOldRowsStaysWithinTheDrainLimit(): void
+    {
+        $this->twoInstances();
+        foreach (range(1, 120) as $i) {
+            $this->outbox->enqueue('tags', ["t$i"]);
+        }
+
+        $this->purge->drain(50);
+
+        $legacy = array_filter($this->outbox->all(), fn ($e) => $e->instance === null);
+        $this->assertCount(70, $legacy, 'only the 50 read were split');
+        $this->assertCount(170, $this->outbox->all(), '50 split in two, 70 untouched');
+    }
+
+    /** A split row keeps its attempts and its backoff: it is not "new". */
+    public function testASplitRowKeepsItsHistory(): void
+    {
+        $this->twoInstances();
+        $this->outbox->enqueue('tags', ['cat_p_1']);
+        $this->outbox->fail([1], 'HTTP 503');
+        $this->outbox->fail([1], 'HTTP 503');
+
+        $this->purge->drain(50, true);
+
+        $this->assertSame([2, 2], array_map(fn ($e) => $e->attempts, $this->outbox->all()));
+        $this->assertSame([], $this->outbox->due(50), 'still backing off');
+    }
+
+    /**
+     * The column compares names case-insensitively; PHP does not. A row for
+     * "Edge-1" matched by "edge-1" must be skipped — not crash the save that
+     * triggered the drain, and not go to the wrong instance.
+     */
+    public function testARowWhoseNameMatchesOnlyCaseInsensitivelyIsSkipped(): void
+    {
+        $log = $this->twoInstances();
+        $this->outbox->caseInsensitive = true;
+        $this->outbox->enqueue('tags', ['old'], 'Edge-1');
+        $this->outbox->enqueue('tags', ['cat_p_1'], 'edge-1');
+
+        $this->assertSame(1, $this->purge->drain(50));
+
+        $this->assertSame(['edge-1' => [['cat_p_1']]], $log->sent);
+        $this->assertSame(['Edge-1'], array_map(fn ($e) => $e->instance, $this->outbox->all()));
     }
 
     /**

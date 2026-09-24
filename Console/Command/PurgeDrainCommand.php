@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace Qoliber\TridentCache\Console\Command;
 
+use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Symfony\Component\Console\Command\Command;
@@ -28,10 +29,12 @@ class PurgeDrainCommand extends Command
     /**
      * @param PurgeAfterCommit $purgeAfterCommit
      * @param PurgeOutboxInterface $outbox
+     * @param Config $config
      */
     public function __construct(
         private readonly PurgeAfterCommit $purgeAfterCommit,
-        private readonly PurgeOutboxInterface $outbox
+        private readonly PurgeOutboxInterface $outbox,
+        private readonly Config $config
     ) {
         parent::__construct();
     }
@@ -60,6 +63,16 @@ class PurgeDrainCommand extends Command
     {
         $forget = (string) $input->getOption('forget');
         if ($forget !== '') {
+            foreach ($this->config->getInstances() as $instance) {
+                if ($instance->name === $forget) {
+                    $output->writeln(sprintf(
+                        '<error>"%s" is still configured: forgetting its purges would leave it serving '
+                        . 'stale pages. Remove it from env.php (and run app:config:import) first.</error>',
+                        $forget
+                    ));
+                    return Command::FAILURE;
+                }
+            }
             $output->writeln(sprintf(
                 'forgot %d purge(s) owed to "%s"',
                 $this->outbox->forgetInstance($forget),

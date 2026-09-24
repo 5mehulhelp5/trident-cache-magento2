@@ -47,6 +47,17 @@ interface PurgeOutboxInterface
     public function due(int $limit, bool $ignoreBackoff = false, array $instances = []): array;
 
     /**
+     * X03: hand rows written before X03 (owed to every instance) to each of
+     * `$instances`, keeping their age, attempts, backoff and last error, and
+     * drop the originals.
+     *
+     * @param array<int> $ids
+     * @param array<int, string> $instances
+     * @return void
+     */
+    public function splitAmong(array $ids, array $instances): void;
+
+    /**
      * X03: drop everything owed to an instance that is gone for good.
      *
      * @param string $instance

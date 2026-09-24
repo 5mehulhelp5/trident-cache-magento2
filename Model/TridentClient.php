@@ -1058,9 +1058,9 @@ class TridentClient
      */
     public function createBan(string $pattern, string $type = 'url'): ?array
     {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->createBan($pattern, $type));
-        }
+        // X03: first instance only, like listing and deleting them — ban ids
+        // are per engine, so a ban created everywhere could be deleted from
+        // one instance and live on, unseen, on the others.
 
         // The /admin/bans request body field is `type` (serde rename of ban_type).
         return $this->apiPost('/admin/bans', ['pattern' => $pattern, 'type' => $type]);

@@ -31,6 +31,9 @@ class TransactionalOutbox implements PurgeOutboxInterface
 
     public bool $broken = false;
 
+    /** Match instance names the way the column's collation would without BINARY. */
+    public bool $caseInsensitive = false;
+
     public function __construct(callable $inTransaction)
     {
         $this->inTransaction = \Closure::fromCallable($inTransaction);
@@ -84,7 +87,11 @@ class TransactionalOutbox implements PurgeOutboxInterface
         $rows = array_values(array_filter(
             $this->rows,
             fn (OutboxEntry $e): bool => ($ignoreBackoff || !isset($this->backingOff[$e->id]))
-                && ($instances === [] || $e->instance === null || in_array($e->instance, $instances, true))
+                && ($instances === [] || $e->instance === null || in_array(
+                    $this->caseInsensitive ? strtolower($e->instance) : $e->instance,
+                    $this->caseInsensitive ? array_map('strtolower', $instances) : $instances,
+                    true
+                ))
         ));
         return array_slice($rows, 0, $limit);
     }
@@ -105,6 +112,24 @@ class TransactionalOutbox implements PurgeOutboxInterface
                 $e = $this->rows[$id];
                 $this->rows[$id] = new OutboxEntry($e->id, $e->kind, $e->tags, $e->attempts + 1, $e->instance);
             }
+        }
+    }
+
+    public function splitAmong(array $ids, array $instances): void
+    {
+        foreach ($ids as $id) {
+            $e = $this->rows[$id] ?? null;
+            if ($e === null || $e->instance !== null) {
+                continue;
+            }
+            foreach ($instances as $instance) {
+                $copy = new OutboxEntry($this->nextId++, $e->kind, $e->tags, $e->attempts, $instance);
+                $this->rows[$copy->id] = $copy;
+                if (isset($this->backingOff[$id])) {
+                    $this->backingOff[$copy->id] = true;
+                }
+            }
+            unset($this->rows[$id], $this->backingOff[$id]);
         }
     }
 

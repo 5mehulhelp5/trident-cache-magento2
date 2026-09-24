@@ -61,7 +61,9 @@ class DbPurgeOutbox implements PurgeOutboxInterface
             $select->where('next_attempt_at <= ?', new Expression('CURRENT_TIMESTAMP'));
         }
         if ($instances !== []) {
-            $select->where('instance IN (?) OR instance IS NULL', $instances);
+            // BINARY: the column's collation is case-insensitive, instance
+            // names are not — "Edge-1" must not be handed to "edge-1".
+            $select->where('BINARY instance IN (?) OR instance IS NULL', $instances);
         }
         $entries = [];
         foreach ($connection->fetchAll($select) as $row) {
@@ -116,9 +118,32 @@ class DbPurgeOutbox implements PurgeOutboxInterface
     /**
      * @inheritDoc
      */
+    public function splitAmong(array $ids, array $instances): void
+    {
+        if ($ids === [] || $instances === []) {
+            return;
+        }
+        $connection = $this->resourceConnection->getConnection();
+        $columns = ['kind', 'tags', 'attempts', 'created_at', 'next_attempt_at', 'last_error', 'last_error_at'];
+        foreach ($instances as $instance) {
+            $select = $connection->select()
+                ->from($this->table(), $columns)
+                ->columns(['instance' => new Expression($connection->quote($instance))])
+                ->where('entity_id IN (?)', $ids)
+                ->where('instance IS NULL')
+                ->order('entity_id ASC');
+            $connection->query($connection->insertFromSelect($select, $this->table(), [...$columns, 'instance']));
+        }
+        $connection->delete($this->table(), ['entity_id IN (?)' => $ids, 'instance IS NULL']);
+    }
+
+    /**
+     * @inheritDoc
+     */
     public function forgetInstance(string $instance): int
     {
-        return (int) $this->resourceConnection->getConnection()->delete($this->table(), ['instance = ?' => $instance]);
+        return (int) $this->resourceConnection->getConnection()
+            ->delete($this->table(), ['BINARY instance = ?' => $instance]);
     }
 
     /**
@@ -143,9 +168,9 @@ class DbPurgeOutbox implements PurgeOutboxInterface
         $byInstance = [];
         foreach ($connection->fetchPairs(
             $connection->select()->from($this->table(), [
-                'instance' => new Expression("COALESCE(instance, '')"),
+                'instance' => new Expression("CAST(COALESCE(instance, '') AS BINARY)"),
                 'pending' => new Expression('COUNT(*)'),
-            ])->group(new Expression("COALESCE(instance, '')"))
+            ])->group(new Expression("CAST(COALESCE(instance, '') AS BINARY)"))
         ) as $instance => $count) {
             $byInstance[(string) $instance] = (int) $count;
         }

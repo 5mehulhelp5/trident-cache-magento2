@@ -135,6 +135,19 @@ class TridentClientInstancesTest extends TestCase
         ));
     }
 
+    /** Ban ids are per engine: created, listed and deleted on one instance. */
+    public function testBansStayOnTheFirstInstance(): void
+    {
+        $this->client->createBan('/sale/*');
+        $this->client->getBans();
+        $this->client->deleteBan('b1');
+
+        $this->assertSame(['edge-1', 'edge-1', 'edge-1'], array_map(
+            fn (array $r): string => (string) parse_url($r[1], PHP_URL_HOST),
+            $this->requests
+        ));
+    }
+
     public function testABoundClientTalksToItsInstanceOnly(): void
     {
         $edge2 = $this->client->forInstance(new Instance('edge-2', 'http://edge-2:9301', 'token-2'));
