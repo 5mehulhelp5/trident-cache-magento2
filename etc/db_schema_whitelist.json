@@ -5,6 +5,7 @@
             "kind": true,
             "tags": true,
             "attempts": true,
+            "instance": true,
             "created_at": true,
             "next_attempt_at": true,
             "last_error": true,

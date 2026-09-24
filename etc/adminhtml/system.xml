@@ -30,6 +30,13 @@
                             <field id="*/*/caching_application">3</field>
                         </depends>
                     </field>
+                    <field id="instances_info" translate="label" sortOrder="25" showInDefault="1">
+                        <label>Purges go to</label>
+                        <frontend_model>Qoliber\TridentCache\Block\Adminhtml\System\Config\Instances</frontend_model>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
                     <field id="soft_purge" type="select" translate="label comment" sortOrder="30" showInDefault="1">
                         <label>Soft Purge</label>
                         <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>

@@ -1,0 +1,129 @@
+<?php
+
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+namespace Qoliber\TridentCache\Test\Unit\Model;
+
+use Magento\Framework\App\Config\ScopeConfigInterface;
+use Magento\Framework\Encryption\EncryptorInterface;
+use PHPUnit\Framework\TestCase;
+use Qoliber\TridentCache\Model\Config;
+use Qoliber\TridentCache\Model\Instance;
+
+/**
+ * X03: the instances come from env.php, layered over the admin setting —
+ * env.php wins, and what an instance leaves out comes from the admin.
+ */
+class ConfigInstancesTest extends TestCase
+{
+    /**
+     * @param mixed $instances What env.php holds under trident/instances.
+     */
+    private function config(mixed $instances): Config
+    {
+        $values = [
+            Config::XML_TRIDENT_API_URL => 'http://admin-edge:9301',
+            Config::XML_TRIDENT_API_TOKEN => '0:3:admin-encrypted',
+            Config::XML_TRIDENT_INSTANCES => $instances,
+        ];
+        $scope = $this->createMock(ScopeConfigInterface::class);
+        $scope->method('getValue')->willReturnCallback(fn (string $path): mixed => $values[$path] ?? null);
+        $encryptor = $this->createMock(EncryptorInterface::class);
+        $encryptor->method('decrypt')->willReturnCallback(fn (string $v): string => 'decrypted(' . $v . ')');
+
+        return new Config($scope, $encryptor);
+    }
+
+    /**
+     * @param array<int, Instance> $instances
+     * @return array<int, array{string, string, string}>
+     */
+    private static function flat(array $instances): array
+    {
+        return array_map(fn (Instance $i): array => [$i->name, $i->apiUrl, $i->apiToken], $instances);
+    }
+
+    public function testWithoutInstancesTheAdminSettingIsTheOneInstance(): void
+    {
+        $config = $this->config(null);
+
+        $this->assertSame(
+            [['default', 'http://admin-edge:9301', 'decrypted(0:3:admin-encrypted)']],
+            self::flat($config->getInstances())
+        );
+        $this->assertSame([], $config->getInstanceErrors());
+    }
+
+    public function testEnvInstancesReplaceTheAdminUrlAndInheritItsToken(): void
+    {
+        $config = $this->config([
+            'edge-1' => ['api_url' => 'http://10.0.0.11:9301'],
+            'edge-2' => ['api_url' => 'http://10.0.0.12:9301', 'api_token' => 'plain-edge-2'],
+            'edge-3' => ['api_url' => 'http://10.0.0.13:9301', 'api_token' => '0:3:looks-encrypted'],
+        ]);
+
+        $this->assertSame([
+            ['edge-1', 'http://10.0.0.11:9301', 'decrypted(0:3:admin-encrypted)'],
+            ['edge-2', 'http://10.0.0.12:9301', 'plain-edge-2'],
+            // Plain text, even when it looks like Magento's cipher format:
+            // guessing would turn a real token into garbage and 401s forever.
+            ['edge-3', 'http://10.0.0.13:9301', '0:3:looks-encrypted'],
+        ], self::flat($config->getInstances()));
+    }
+
+    public function testAnEntryWithoutAnApiUrlIsSkippedAndReported(): void
+    {
+        $config = $this->config([
+            'edge-1' => ['api_url' => 'http://10.0.0.11:9301'],
+            'edge-2' => ['api_token' => 'x'],
+            'edge-3' => 'http://10.0.0.13:9301',
+        ]);
+
+        $this->assertSame(['edge-1'], array_map(fn (Instance $i): string => $i->name, $config->getInstances()));
+        $this->assertSame(
+            ['edge-2: no api_url', 'edge-3: expected an array with api_url'],
+            $config->getInstanceErrors()
+        );
+    }
+
+    /**
+     * Nothing usable must not mean "purge nowhere".
+     */
+    public function testWhenNoEntryIsUsableTheAdminSettingIsUsed(): void
+    {
+        $config = $this->config(['edge-1' => ['api_url' => '  ']]);
+
+        $this->assertSame(['default'], array_map(fn (Instance $i): string => $i->name, $config->getInstances()));
+        $this->assertSame(['edge-1: no api_url'], $config->getInstanceErrors());
+    }
+
+    public function testAListWithoutNamesIsNumbered(): void
+    {
+        $config = $this->config([
+            ['api_url' => 'http://10.0.0.11:9301'],
+            ['api_url' => 'http://10.0.0.12:9301'],
+        ]);
+
+        $this->assertSame(
+            ['instance-1', 'instance-2'],
+            array_map(fn (Instance $i): string => $i->name, $config->getInstances())
+        );
+    }
+
+    public function testANameTooLongToStoreIsRefused(): void
+    {
+        $long = str_repeat('e', Config::MAX_INSTANCE_NAME + 1);
+        $config = $this->config([$long => ['api_url' => 'http://10.0.0.11:9301']]);
+
+        $this->assertSame(['default'], array_map(fn (Instance $i): string => $i->name, $config->getInstances()));
+        $this->assertStringContainsString('name longer than 64', $config->getInstanceErrors()[0]);
+    }
+}

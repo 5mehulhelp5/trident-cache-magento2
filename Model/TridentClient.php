@@ -37,6 +37,99 @@ class TridentClient
     }
 
     /**
+     * X03: the instance this client talks to. Null — as injected — means
+     * "the store's instances": invalidations go to every one of them, and
+     * everything else (dashboard reads, the warmer, launch, reflect …) to the
+     * first. A bound client is always one instance.
+     */
+    private ?Instance $instance = null;
+
+    /**
+     * X03: every Trident instance this store invalidates.
+     *
+     * @return array<int, Instance>
+     */
+    public function instances(): array
+    {
+        // Config never returns an empty list, but an empty list here would
+        // mean "purge nowhere" — so it is read as the admin setting instead.
+        return $this->config->getInstances()
+            ?: [new Instance(Config::DEFAULT_INSTANCE, $this->config->getApiUrl(), $this->config->getApiToken())];
+    }
+
+    /**
+     * X03: a client bound to one instance, sharing this one's Curl handle.
+     *
+     * @param Instance $instance
+     * @return self
+     */
+    public function forInstance(Instance $instance): self
+    {
+        $client = clone $this;
+        $client->instance = $instance;
+        $client->lastFailure = null;
+        return $client;
+    }
+
+    /**
+     * @return Instance
+     */
+    private function target(): Instance
+    {
+        return $this->instance ?? $this->instances()[0];
+    }
+
+    /**
+     * Whether an invalidation from this client must go to several instances.
+     *
+     * @return bool
+     */
+    private function fansOut(): bool
+    {
+        return $this->instance === null && count($this->instances()) > 1;
+    }
+
+    /**
+     * X03: an invalidation on every instance. It counts as done only when
+     * every instance answered: a purge that reached edge-1 but not edge-2
+     * leaves edge-2 serving the old page, so it is reported as failed, with
+     * the instances that failed and why in {@see lastFailure()}. Counts
+     * (`purged`, `affected` …) are summed; per-instance answers are under
+     * `instances`.
+     *
+     * @param callable(self): (array<string, mixed>|null) $call
+     * @return array<string, mixed>|null
+     */
+    private function onEveryInstance(callable $call): ?array
+    {
+        $results = [];
+        $failed = [];
+        foreach ($this->instances() as $instance) {
+            $client = $this->forInstance($instance);
+            $result = $call($client);
+            $results[$instance->name] = $result;
+            if ($result === null) {
+                $failed[] = $instance->name . ': ' . ($client->lastFailure() ?? 'no acknowledgement');
+            }
+        }
+        if ($failed !== []) {
+            $this->lastFailure = implode('; ', $failed);
+            return null;
+        }
+        $this->lastFailure = null;
+        /** @var array<string, array<string, mixed>> $results */
+        $merged = reset($results);
+        foreach (['purged', 'affected', 'queued_refresh', 'entries_removed', 'bytes_freed'] as $count) {
+            $values = array_column($results, $count);
+            if (count($values) === count($results) && array_filter($values, 'is_int') === $values) {
+                $merged[$count] = array_sum($values);
+            }
+        }
+        $merged['instances'] = $results;
+        return $merged;
+    }
+
+    /**
      * Prepare the shared Curl handle for a request: apply an explicit timeout and
      * pin the HTTP verb, so state from a prior call (notably a DELETE's
      * CURLOPT_CUSTOMREQUEST) cannot leak into this one.
@@ -74,10 +167,10 @@ class TridentClient
         // it without one just fires empty-Bearer 401s that are then swallowed into
         // permanent stale content. Gate them out cleanly and surface a distinct,
         // debug-independent warning once so the misconfiguration is visible.
-        if (!$this->config->isTridentEnabled() || empty($this->config->getApiUrl())) {
+        if (!$this->config->isTridentEnabled() || empty($this->target()->apiUrl)) {
             return false;
         }
-        if ($this->config->getApiToken() === '') {
+        if ($this->target()->apiToken === '') {
             if (!self::$tokenMissingLogged) {
                 self::$tokenMissingLogged = true;
                 $this->logger->warning(
@@ -101,6 +194,10 @@ class TridentClient
      */
     public function purgeTags(array $tags, array $excludeTags = []): ?array
     {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeTags($tags, $excludeTags));
+        }
+
         if (!$this->isEnabled() || empty($tags)) {
             return null;
         }
@@ -115,10 +212,10 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
                 'Content-Type' => 'application/json',
             ]);
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/purge/tags', (string) json_encode($data));
             $result = $this->acknowledged('purge_tags', self::isPurgeAck(...));
@@ -162,16 +259,20 @@ class TridentClient
      */
     public function purgeAll(): ?array
     {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeAll());
+        }
+
         if (!$this->isEnabled()) {
             return null;
         }
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
                 'Content-Type' => 'application/json',
             ]);
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/cache/clear', (string) json_encode(['confirm' => true]));
             $result = $this->acknowledged('cache_clear', self::isClearAck(...));
@@ -284,10 +385,10 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
             ]);
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/stats');
 
@@ -312,10 +413,10 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
             ]);
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/rules');
 
@@ -340,10 +441,10 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
             ]);
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/health');
 
@@ -372,12 +473,12 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
             ]);
 
             $this->prepareRequest('GET');
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->curl->get($apiUrl . '/admin/status');
             $this->logHttpError('GET /admin/status');
 
@@ -426,7 +527,7 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
             ]);
 
             $params = ['offset' => $offset, 'limit' => $limit, 'sort' => $sort];
@@ -434,7 +535,7 @@ class TridentClient
                 $params['tag'] = $tag;
             }
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/cache/entries?' . http_build_query($params));
 
@@ -463,7 +564,7 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
             ]);
 
             $params = ['offset' => $offset, 'limit' => $limit, 'sort' => $sort];
@@ -471,7 +572,7 @@ class TridentClient
                 $params['prefix'] = $prefix;
             }
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/cache/tags?' . http_build_query($params));
 
@@ -498,12 +599,12 @@ class TridentClient
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
             ]);
 
             $params = ['limit' => $limit, 'sort' => $sort];
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('GET');
             $this->curl->get($apiUrl . '/admin/stats/top?' . http_build_query($params));
 
@@ -524,13 +625,17 @@ class TridentClient
      */
     public function purgeUrl(string $url, ?string $host = null): ?array
     {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeUrl($url, $host));
+        }
+
         if (!$this->isEnabled() || empty($url)) {
             return null;
         }
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
                 'Content-Type' => 'application/json',
             ]);
 
@@ -543,7 +648,7 @@ class TridentClient
                 $data['host'] = $host;
             }
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/purge/url', json_encode($data));
 
@@ -576,13 +681,17 @@ class TridentClient
      */
     public function purgePattern(string $pattern): ?array
     {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgePattern($pattern));
+        }
+
         if (!$this->isEnabled() || empty($pattern)) {
             return null;
         }
 
         try {
             $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Authorization' => 'Bearer ' . $this->target()->apiToken,
                 'Content-Type' => 'application/json',
             ]);
 
@@ -591,7 +700,7 @@ class TridentClient
                 'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
             ]);
 
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $apiUrl = rtrim($this->target()->apiUrl, '/');
             $this->prepareRequest('POST');
             $this->curl->post($apiUrl . '/admin/purge/urls', $payload);
 
@@ -624,7 +733,7 @@ class TridentClient
      */
     private function authHeaders(bool $json = false): array
     {
-        $headers = ['Authorization' => 'Bearer ' . $this->config->getApiToken()];
+        $headers = ['Authorization' => 'Bearer ' . $this->target()->apiToken];
         if ($json) {
             $headers['Content-Type'] = 'application/json';
         }
@@ -646,7 +755,7 @@ class TridentClient
         try {
             $this->curl->setHeaders($this->authHeaders());
             $this->prepareRequest('GET');
-            $this->curl->get(rtrim($this->config->getApiUrl(), '/') . $path);
+            $this->curl->get(rtrim($this->target()->apiUrl, '/') . $path);
             $this->logHttpError('GET ' . $path);
 
             return json_decode($this->curl->getBody(), true);
@@ -671,7 +780,7 @@ class TridentClient
         try {
             $this->curl->setHeaders($this->authHeaders(true));
             $this->prepareRequest('POST');
-            $this->curl->post(rtrim($this->config->getApiUrl(), '/') . $path, json_encode($data));
+            $this->curl->post(rtrim($this->target()->apiUrl, '/') . $path, json_encode($data));
             $this->logHttpError('POST ' . $path);
             $result = json_decode($this->curl->getBody(), true);
 
@@ -703,7 +812,7 @@ class TridentClient
             // and the next GET/POST re-pins its own verb — so the DELETE cannot
             // leak into a later call on the shared Curl handle.
             $this->prepareRequest('DELETE');
-            $this->curl->get(rtrim($this->config->getApiUrl(), '/') . $path);
+            $this->curl->get(rtrim($this->target()->apiUrl, '/') . $path);
             $this->logHttpError('DELETE ' . $path);
 
             return json_decode($this->curl->getBody(), true);
@@ -949,6 +1058,10 @@ class TridentClient
      */
     public function createBan(string $pattern, string $type = 'url'): ?array
     {
+        // X03: first instance only, like listing and deleting them — ban ids
+        // are per engine, so a ban created everywhere could be deleted from
+        // one instance and live on, unseen, on the others.
+
         // The /admin/bans request body field is `type` (serde rename of ban_type).
         return $this->apiPost('/admin/bans', ['pattern' => $pattern, 'type' => $type]);
     }
@@ -1061,6 +1174,10 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function purgeHost(string $host): ?array
     {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeHost($host));
+        }
+
         return $this->apiPost('/admin/purge/host', [
             'host' => $host,
             'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
@@ -1070,6 +1187,10 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function purgeVary(string $header, string $value): ?array
     {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeVary($header, $value));
+        }
+
         return $this->apiPost('/admin/purge/vary', [
             'header' => $header,
             'value' => $value,
@@ -1088,6 +1209,10 @@ class TridentClient
      */
     public function purgeTagPattern(string $pattern, bool $regex = false): ?array
     {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeTagPattern($pattern, $regex));
+        }
+
         return $this->apiPost('/admin/purge/tag/pattern', [
             'pattern' => $pattern,
             'pattern_type' => $regex ? 'regex' : 'wildcard',

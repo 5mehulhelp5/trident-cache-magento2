@@ -31,17 +31,20 @@ class TransactionalOutbox implements PurgeOutboxInterface
 
     public bool $broken = false;
 
+    /** Match instance names the way the column's collation would without BINARY. */
+    public bool $caseInsensitive = false;
+
     public function __construct(callable $inTransaction)
     {
         $this->inTransaction = \Closure::fromCallable($inTransaction);
     }
 
-    public function enqueue(string $kind, array $tags = []): void
+    public function enqueue(string $kind, array $tags = [], ?string $instance = null): void
     {
         if ($this->broken) {
             throw new \RuntimeException("Base table or view not found: qoliber_trident_purge_outbox");
         }
-        $entry = new OutboxEntry($this->nextId++, $kind, array_values($tags));
+        $entry = new OutboxEntry($this->nextId++, $kind, array_values($tags), 0, $instance);
         if (($this->inTransaction)()) {
             $this->uncommitted[$entry->id] = $entry;
         } else {
@@ -50,9 +53,9 @@ class TransactionalOutbox implements PurgeOutboxInterface
     }
 
     /** Reserve an id for another connection's still-open write. */
-    public function reserveForOtherTransaction(string $kind, array $tags): OutboxEntry
+    public function reserveForOtherTransaction(string $kind, array $tags, ?string $instance = 'default'): OutboxEntry
     {
-        return new OutboxEntry($this->nextId++, $kind, $tags);
+        return new OutboxEntry($this->nextId++, $kind, $tags, 0, $instance);
     }
 
     public function commitOther(OutboxEntry $entry): void
@@ -76,14 +79,19 @@ class TransactionalOutbox implements PurgeOutboxInterface
     /** @var array<int, true> ids waiting out a backoff */
     public array $backingOff = [];
 
-    public function due(int $limit, bool $ignoreBackoff = false): array
+    public function due(int $limit, bool $ignoreBackoff = false, array $instances = []): array
     {
         if ($this->broken) {
             throw new \RuntimeException('Base table or view not found');
         }
         $rows = array_values(array_filter(
             $this->rows,
-            fn (OutboxEntry $e): bool => $ignoreBackoff || !isset($this->backingOff[$e->id])
+            fn (OutboxEntry $e): bool => ($ignoreBackoff || !isset($this->backingOff[$e->id]))
+                && ($instances === [] || $e->instance === null || in_array(
+                    $this->caseInsensitive ? strtolower($e->instance) : $e->instance,
+                    $this->caseInsensitive ? array_map('strtolower', $instances) : $instances,
+                    true
+                ))
         ));
         return array_slice($rows, 0, $limit);
     }
@@ -102,9 +110,40 @@ class TransactionalOutbox implements PurgeOutboxInterface
                 $this->failures[$id] = $reason;
                 $this->backingOff[$id] = true;
                 $e = $this->rows[$id];
-                $this->rows[$id] = new OutboxEntry($e->id, $e->kind, $e->tags, $e->attempts + 1);
+                $this->rows[$id] = new OutboxEntry($e->id, $e->kind, $e->tags, $e->attempts + 1, $e->instance);
             }
         }
+    }
+
+    public function splitAmong(array $ids, array $instances): void
+    {
+        foreach ($ids as $id) {
+            $e = $this->rows[$id] ?? null;
+            if ($e === null || $e->instance !== null) {
+                continue;
+            }
+            foreach ($instances as $instance) {
+                $copy = new OutboxEntry($this->nextId++, $e->kind, $e->tags, $e->attempts, $instance);
+                $this->rows[$copy->id] = $copy;
+                if (isset($this->backingOff[$id])) {
+                    $this->backingOff[$copy->id] = true;
+                }
+            }
+            unset($this->rows[$id], $this->backingOff[$id]);
+        }
+    }
+
+    public function forgetInstance(string $instance): int
+    {
+        $before = count($this->rows);
+        $this->rows = array_filter($this->rows, fn (OutboxEntry $e): bool => $e->instance !== $instance);
+        return $before - count($this->rows);
+    }
+
+    /** @return array<int, OutboxEntry> every committed row */
+    public function all(): array
+    {
+        return array_values($this->rows);
     }
 
     public function stats(): array
@@ -114,6 +153,10 @@ class TransactionalOutbox implements PurgeOutboxInterface
             'oldest_age' => $this->rows === [] ? null : 0,
             'last_error' => $this->failures === [] ? null : end($this->failures),
             'last_error_at' => null,
+            'by_instance' => array_count_values(array_map(
+                fn (OutboxEntry $e): string => $e->instance ?? '',
+                array_values($this->rows)
+            )),
         ];
     }
 }
