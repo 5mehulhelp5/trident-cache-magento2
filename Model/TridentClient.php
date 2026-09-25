@@ -329,6 +329,14 @@ class TridentClient
             $this->lastFailure = null;
             return $decoded;
         }
+        if ($status === 202 && is_array($decoded) && self::isDeferredAck($decoded)) {
+            // Reflect mode: the engine durably queued the purge and replays it
+            // when reflect ends. Retrying it every few minutes would only queue
+            // duplicates until the reflect queue is full, and then genuinely
+            // new purges get 503.
+            $this->lastFailure = null;
+            return $decoded;
+        }
         $error = is_array($decoded) ? ($decoded['error'] ?? null) : 'response is not JSON';
         $this->lastFailure = sprintf(
             '%s: HTTP %d%s',
@@ -359,6 +367,19 @@ class TridentClient
         return is_int($body['purged'] ?? null)
             && is_string($body['mode'] ?? null)
             && (!isset($body['state']) || is_string($body['state']));
+    }
+
+    /**
+     * The engine's answer to a purge Reflect mode deferred: HTTP 202,
+     * `status: "deferred"`, `state: "recorded"` — written to the reflect queue
+     * durably (a failed write answers 503 with `state: "refused"` instead).
+     *
+     * @param array<string, mixed> $body
+     * @return bool
+     */
+    private static function isDeferredAck(array $body): bool
+    {
+        return ($body['status'] ?? null) === 'deferred' && ($body['state'] ?? null) === 'recorded';
     }
 
     /**

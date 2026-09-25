@@ -13,6 +13,15 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 <!-- At tag time: replace "unreleased" with the release date, tag v1.8.0 at
      that commit, and point the engine submodule at it (F15). -->
 
+### Fixed — a purge deferred by Reflect mode was retried as a failure
+
+In Reflect mode Trident answers a purge with HTTP 202, `status: "deferred"`,
+`state: "recorded"`: it has durably queued the purge and replays it when
+reflect ends. The module counted that as not acknowledged and retried it every
+few minutes, queueing duplicates until the reflect queue was full — after which
+genuinely new purges were refused with 503. That answer now counts as
+delivered; 503 `refused` and everything else still do not.
+
 ### Added — several Trident instances (X03)
 
 Stores running more than one Trident server can now purge all of them.
