@@ -101,6 +101,40 @@ class TridentClientDeliveryTest extends TestCase
         $this->assertTrue($this->client->deliverTags(['cat_p_1']));
     }
 
+    /**
+     * Reflect mode defers a purge: 202 + state "recorded" means the engine
+     * queued it durably and will replay it. Treating it as a failure retried
+     * it every few minutes, queueing duplicates until the reflect queue was
+     * full and new purges got 503.
+     */
+    public function testAPurgeDeferredByReflectModeIsDelivered(): void
+    {
+        $this->answer(202, '{"status":"deferred","queued_purges":3,"state":"recorded","barrier":"deferred"}');
+
+        $this->assertTrue($this->client->deliverTags(['cat_p_1']));
+    }
+
+    /**
+     * @return array<string, array{int, string}>
+     */
+    public static function notDeferredAcknowledgements(): array
+    {
+        return [
+            'refused by reflect (503)' => [503, '{"status":"rejected","reason":"queue_full","state":"refused"}'],
+            '202 without recorded state' => [202, '{"status":"deferred"}'],
+            '202 recorded but not deferred' => [202, '{"status":"accepted","state":"recorded"}'],
+            'recorded with 200 but no purge schema' => [200, '{"status":"deferred","state":"recorded"}'],
+        ];
+    }
+
+    #[DataProvider('notDeferredAcknowledgements')]
+    public function testOnlyTheEnginesDeferralAnswerCountsAsDelivered(int $status, string $body): void
+    {
+        $this->answer($status, $body);
+
+        $this->assertFalse($this->client->deliverTags(['cat_p_1']));
+    }
+
     public function testATransportFailureIsNotDelivered(): void
     {
         $this->curl->method('post')->willThrowException(new \Exception('Connection timed out'));
