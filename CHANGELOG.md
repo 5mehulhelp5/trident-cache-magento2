@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 From v1.4.0 the module version tracks the Trident engine version it integrates
 with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
-## [Unreleased] — pairs with Trident 1.8.0
+## [1.8.0] — unreleased (pairs with Trident 1.8.0)
+
+<!-- At tag time: replace "unreleased" with the release date, tag v1.8.0 at
+     that commit, and point the engine submodule at it (F15). -->
 
 ### Added — several Trident instances (X03)
 
